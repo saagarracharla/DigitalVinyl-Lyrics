@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=1080, height=1080, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>🎤 Vinyl Karaoke Player</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
 </head>
@@ -32,6 +32,12 @@
     <div class="vinyl-mode" id="vinylMode" style="display: none;">
         <div class="vinyl-container">
             <div class="vinyl-circle">
+                <!-- Circular Progress Ring -->
+                <svg class="progress-ring" viewBox="0 0 1080 1080">
+                    <circle class="progress-ring-bg" cx="540" cy="540" r="535" />
+                    <circle class="progress-ring-fill" cx="540" cy="540" r="535" id="progressRing" />
+                </svg>
+                
                 <!-- Album Art Background -->
                 <div class="album-art" id="albumArt"></div>
                 <div class="album-overlay" id="albumOverlay"></div>
@@ -46,9 +52,18 @@
                     
                     <!-- Lyrics State -->
                     <div class="lyric-display" id="lyricDisplay">
+                        <div class="previous-lyric" id="previousLyric"></div>
                         <div class="current-lyric" id="currentLyric"></div>
+                        <div class="next-lyric" id="nextLyric"></div>
                     </div>
                 </div>
+            </div>
+            
+            <!-- Playback Controls -->
+            <div class="vinyl-controls">
+                <button class="control-btn" id="prevBtn">⏮</button>
+                <button class="control-btn" id="playPauseBtn">⏸</button>
+                <button class="control-btn" id="nextBtn">⏭</button>
             </div>
         </div>
     </div>

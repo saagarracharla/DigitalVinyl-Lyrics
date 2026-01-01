@@ -31,6 +31,18 @@ def create_app():
         
         return lyrics_service.get_lyrics(track, artist)
     
+    @app.route('/play-pause', methods=['POST'])
+    def play_pause():
+        return spotify_service.play_pause()
+    
+    @app.route('/next-track', methods=['POST'])
+    def next_track():
+        return spotify_service.next_track()
+    
+    @app.route('/previous-track', methods=['POST'])
+    def previous_track():
+        return spotify_service.previous_track()
+    
     return app
 
 if __name__ == '__main__':

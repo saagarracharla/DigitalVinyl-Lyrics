@@ -9,6 +9,7 @@ class VinylKaraokeApp {
         this.currentLyricIndex = -1;
         this.isVinylMode = false;
         this.vinylState = 'idle'; // idle, track-info, lyrics
+        this.wasPlaying = false; // Track previous playing state
         
         this.initializeElements();
         this.bindEvents();
@@ -32,7 +33,18 @@ class VinylKaraokeApp {
         this.lyricDisplay = document.getElementById('lyricDisplay');
         this.vinylArtist = document.getElementById('vinylArtist');
         this.vinylTitle = document.getElementById('vinylTitle');
+        this.previousLyric = document.getElementById('previousLyric');
         this.currentLyric = document.getElementById('currentLyric');
+        this.nextLyric = document.getElementById('nextLyric');
+        
+        // Control Buttons
+        this.prevBtn = document.getElementById('prevBtn');
+        this.playPauseBtn = document.getElementById('playPauseBtn');
+        this.nextBtn = document.getElementById('nextBtn');
+        
+        // Progress Ring
+        this.progressRing = document.getElementById('progressRing');
+        this.progressCircumference = 2 * Math.PI * 535; // radius = 535
         
         // Buttons
         this.vinylBtn = document.getElementById('vinylBtn');
@@ -42,6 +54,11 @@ class VinylKaraokeApp {
     bindEvents() {
         this.vinylBtn.addEventListener('click', () => this.toggleVinylMode());
         this.refreshBtn.addEventListener('click', () => location.reload());
+        
+        // Playback controls
+        this.prevBtn.addEventListener('click', () => this.previousTrack());
+        this.playPauseBtn.addEventListener('click', () => this.playPause());
+        this.nextBtn.addEventListener('click', () => this.nextTrack());
     }
     
     startPolling() {
@@ -53,9 +70,28 @@ class VinylKaraokeApp {
             const response = await fetch('/current-track');
             const data = await response.json();
             
-            if (!data.is_playing) {
+            const currentlyPlaying = data.is_playing;
+            
+            if (!currentlyPlaying) {
+                if (this.wasPlaying) {
+                    console.log('Playback paused');
+                    this.wasPlaying = false;
+                }
                 this.handleNoPlayback();
                 return;
+            }
+            
+            // Detect resume from pause
+            if (!this.wasPlaying && currentlyPlaying && this.currentTrack) {
+                console.log('Playback resumed - transitioning to lyrics');
+                this.wasPlaying = true;
+                
+                // If in vinyl mode with lyrics loaded, go back to lyrics immediately
+                if (this.isVinylMode && this.lyrics.length > 0 && this.vinylState === 'track-info') {
+                    this.transitionToVinylLyrics();
+                }
+            } else if (currentlyPlaying) {
+                this.wasPlaying = true;
             }
             
             // New track detected
@@ -63,12 +99,15 @@ class VinylKaraokeApp {
                 this.currentTrack.artist !== data.artist || 
                 this.currentTrack.track_name !== data.track_name) {
                 
+                this.wasPlaying = true;
                 await this.handleNewTrack(data);
                 return;
             }
             
-            // Update timing
-            this.updateTiming(data);
+            // Update timing only if playing
+            if (currentlyPlaying) {
+                this.updateTiming(data);
+            }
             
         } catch (error) {
             console.error('Polling error:', error);
@@ -78,10 +117,16 @@ class VinylKaraokeApp {
     handleNoPlayback() {
         this.statusEl.textContent = '🎵 Play a song in Spotify to start';
         this.progressContainer.style.display = 'none';
-        this.clearLyrics();
         
-        if (this.isVinylMode) {
-            this.resetVinylMode();
+        if (this.isVinylMode && this.vinylState === 'lyrics') {
+            console.log('Paused - showing track info');
+            // When paused, go back to track info but keep progress
+            this.lyricDisplay.classList.remove('visible');
+            this.trackInfo.classList.add('visible');
+            this.albumArt.classList.remove('blurred');
+            this.albumOverlay.classList.remove('visible');
+            this.vinylState = 'track-info';
+            // Progress ring stays where it was
         }
     }
     
@@ -113,7 +158,7 @@ class VinylKaraokeApp {
                 
                 // Vinyl Mode: Transition to lyrics after delay
                 if (this.isVinylMode) {
-                    setTimeout(() => this.transitionToVinylLyrics(), 3000);
+                    setTimeout(() => this.transitionToVinylLyrics(), 4000); // Longer delay to show album art
                 }
             } else {
                 this.lyrics = [];
@@ -133,6 +178,12 @@ class VinylKaraokeApp {
         
         // Update progress bar
         this.progressFill.style.width = `${progress * 100}%`;
+        
+        // Update circular progress ring in vinyl mode
+        if (this.isVinylMode) {
+            const offset = this.progressCircumference - (progress * this.progressCircumference);
+            this.progressRing.style.strokeDashoffset = offset;
+        }
         
         // Find current lyric
         const newIndex = this.findCurrentLyricIndex(currentTime);
@@ -180,9 +231,8 @@ class VinylKaraokeApp {
         }
         
         // Update vinyl mode
-        if (this.isVinylMode && this.vinylState === 'lyrics' && this.currentLyricIndex >= 0) {
-            const currentLyricText = this.lyrics[this.currentLyricIndex].words;
-            this.currentLyric.textContent = currentLyricText;
+        if (this.isVinylMode && this.vinylState === 'lyrics') {
+            this.updateVinylLyrics();
         }
     }
     
@@ -266,10 +316,35 @@ class VinylKaraokeApp {
         
         // Show current lyric if available
         if (this.currentLyricIndex >= 0) {
-            this.currentLyric.textContent = this.lyrics[this.currentLyricIndex].words;
+            this.updateVinylLyrics();
         }
         
         console.log('Vinyl: Transitioned to lyrics mode');
+    }
+    
+    updateVinylLyrics() {
+        // Previous lyric
+        if (this.currentLyricIndex > 0) {
+            this.previousLyric.textContent = this.lyrics[this.currentLyricIndex - 1].words;
+            this.previousLyric.classList.add('visible');
+        } else {
+            this.previousLyric.textContent = '';
+            this.previousLyric.classList.remove('visible');
+        }
+        
+        // Current lyric
+        if (this.currentLyricIndex >= 0 && this.currentLyricIndex < this.lyrics.length) {
+            this.currentLyric.textContent = this.lyrics[this.currentLyricIndex].words;
+        }
+        
+        // Next lyric
+        if (this.currentLyricIndex >= 0 && this.currentLyricIndex < this.lyrics.length - 1) {
+            this.nextLyric.textContent = this.lyrics[this.currentLyricIndex + 1].words;
+            this.nextLyric.classList.add('visible');
+        } else {
+            this.nextLyric.textContent = '';
+            this.nextLyric.classList.remove('visible');
+        }
     }
     
     resetVinylMode() {
@@ -278,6 +353,50 @@ class VinylKaraokeApp {
         this.albumOverlay.classList.remove('visible');
         this.trackInfo.classList.remove('visible');
         this.lyricDisplay.classList.remove('visible');
+    }
+    
+    // PLAYBACK CONTROLS
+    async playPause() {
+        try {
+            const response = await fetch('/play-pause', { method: 'POST' });
+            const data = await response.json();
+            
+            console.log('Play/pause response:', data);
+            
+            if (data.action === 'paused') {
+                this.playPauseBtn.textContent = '▶';
+            } else if (data.action === 'playing') {
+                this.playPauseBtn.textContent = '⏸';
+            }
+            
+            // Force immediate state check after button press
+            setTimeout(() => {
+                this.checkCurrentTrack();
+            }, 100);
+            
+        } catch (error) {
+            console.error('Play/pause error:', error);
+        }
+    }
+    
+    async nextTrack() {
+        try {
+            await fetch('/next-track', { method: 'POST' });
+            // Check for new track after delay
+            setTimeout(() => this.checkCurrentTrack(), 500);
+        } catch (error) {
+            console.error('Next track error:', error);
+        }
+    }
+    
+    async previousTrack() {
+        try {
+            await fetch('/previous-track', { method: 'POST' });
+            // Check for new track after delay
+            setTimeout(() => this.checkCurrentTrack(), 500);
+        } catch (error) {
+            console.error('Previous track error:', error);
+        }
     }
 }
 
