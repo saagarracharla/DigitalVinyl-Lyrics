@@ -42,6 +42,10 @@ class VinylKaraokeApp {
         this.playPauseBtn = document.getElementById('playPauseBtn');
         this.nextBtn = document.getElementById('nextBtn');
         
+        // Timestamps
+        this.seekTimestamp = document.getElementById('seekTimestamp');
+        this.pauseTimestamp = document.getElementById('pauseTimestamp');
+        
         // Progress Ring
         this.progressRing = document.getElementById('progressRing');
         this.progressCircumference = 2 * Math.PI * 535; // radius = 535
@@ -109,6 +113,11 @@ class VinylKaraokeApp {
                 console.log('Playback resumed - transitioning to lyrics');
                 this.wasPlaying = true;
                 
+                // Hide pause timestamp when resuming
+                if (this.isVinylMode && this.pauseTimestamp) {
+                    this.pauseTimestamp.classList.remove('visible');
+                }
+                
                 // If in vinyl mode with lyrics loaded, go back to lyrics immediately
                 if (this.isVinylMode && this.lyrics.length > 0 && this.vinylState === 'track-info') {
                     this.transitionToVinylLyrics();
@@ -154,6 +163,12 @@ class VinylKaraokeApp {
             this.albumArt.classList.remove('blurred');
             this.albumOverlay.classList.remove('visible');
             this.vinylState = 'track-info';
+            
+            // Show pause timestamp if we have a current position
+            if (this.actualCurrentPosition > 0) {
+                this.pauseTimestamp.textContent = `⏸ ${this.formatTime(this.actualCurrentPosition)}`;
+                this.pauseTimestamp.classList.add('visible');
+            }
             // Progress ring stays where it was
         }
     }
@@ -223,14 +238,12 @@ class VinylKaraokeApp {
         const currentTime = trackData.progress_ms;
         const progress = trackData.progress_ms / trackData.duration_ms;
         
-        // Always update our tracked position when not dragging
-        if (!this.isDragging) {
+        // NEVER update tracked position during dragging or recent seeking
+        if (!this.isDragging && !this.justSeeked) {
             this.actualCurrentPosition = currentTime;
             this.lastUpdateTime = Date.now();
-        }
-        
-        // Update progress bars ONLY if we're not dragging and haven't recently seeked
-        if (!this.isDragging && !this.justSeeked) {
+            
+            // Update progress bars
             this.updateProgressBars(progress);
             
             // Start smooth progress if not already running
@@ -239,8 +252,8 @@ class VinylKaraokeApp {
             }
         }
         
-        // Find current lyric only if we have lyrics
-        if (this.lyrics.length > 0) {
+        // Find current lyric only if we have lyrics and not seeking
+        if (this.lyrics.length > 0 && !this.isDragging) {
             const newIndex = this.findCurrentLyricIndex(currentTime);
             
             if (newIndex !== this.currentLyricIndex) {
@@ -262,19 +275,16 @@ class VinylKaraokeApp {
     }
     
     startSmoothProgress(duration) {
-        // Clear any existing interval
-        if (this.smoothProgressInterval) {
-            clearInterval(this.smoothProgressInterval);
-        }
-        
-        // Don't start if we're dragging or just seeked
-        if (this.isDragging || this.justSeeked) {
+        // Don't start if we're dragging, just seeked, or already running
+        if (this.isDragging || this.justSeeked || this.smoothProgressInterval) {
             return;
         }
         
         this.smoothProgressInterval = setInterval(() => {
             if (this.isDragging || this.justSeeked || !this.currentTrack) {
-                return; // Don't update during gestures or recent seeks
+                // Stop and clear interval if conditions change
+                this.stopSmoothProgress();
+                return;
             }
             
             // Calculate interpolated position
@@ -332,7 +342,17 @@ class VinylKaraokeApp {
         
         // Update vinyl mode
         if (this.isVinylMode && this.vinylState === 'lyrics') {
-            this.updateVinylLyrics();
+            if (this.currentLyricIndex >= 0 || this.lyrics.length > 0) {
+                // Show lyrics even if currentLyricIndex is -1 (for instrumental intro)
+                this.updateVinylLyrics();
+            } else {
+                // Clear lyrics when no lyrics available
+                this.previousLyric.textContent = '';
+                this.currentLyric.textContent = '';
+                this.nextLyric.textContent = '';
+                this.previousLyric.classList.remove('visible');
+                this.nextLyric.classList.remove('visible');
+            }
         }
     }
     
@@ -396,10 +416,13 @@ class VinylKaraokeApp {
         this.previousLyric.classList.remove('visible');
         this.nextLyric.classList.remove('visible');
         
-        // Set album art
+        // Set album art and reset rotation
         if (trackData.album_art) {
             this.albumArt.style.backgroundImage = `url(${trackData.album_art})`;
         }
+        
+        // Reset album art rotation to straight up
+        this.albumArt.style.transform = '';
         
         // Ensure album art is clear (not blurred)
         this.albumArt.classList.remove('blurred');
@@ -438,6 +461,21 @@ class VinylKaraokeApp {
     }
     
     updateVinylLyrics() {
+        // Handle case where we're before the first lyric (instrumental intro)
+        if (this.currentLyricIndex === -1 && this.lyrics.length > 0) {
+            // Show first lyric as "upcoming" during instrumental intro
+            this.previousLyric.textContent = '';
+            this.previousLyric.classList.remove('visible');
+            
+            this.currentLyric.textContent = this.lyrics[0].words;
+            this.currentLyric.style.opacity = '0.4'; // Faded like upcoming
+            
+            this.nextLyric.textContent = '';
+            this.nextLyric.classList.remove('visible');
+            return;
+        }
+        
+        // Normal lyric display logic
         // Previous lyric
         if (this.currentLyricIndex > 0) {
             this.previousLyric.textContent = this.lyrics[this.currentLyricIndex - 1].words;
@@ -450,6 +488,9 @@ class VinylKaraokeApp {
         // Current lyric
         if (this.currentLyricIndex >= 0 && this.currentLyricIndex < this.lyrics.length) {
             this.currentLyric.textContent = this.lyrics[this.currentLyricIndex].words;
+            this.currentLyric.style.opacity = '1'; // Full brightness for active
+        } else {
+            this.currentLyric.textContent = '';
         }
         
         // Next lyric
@@ -627,17 +668,28 @@ class VinylKaraokeApp {
             // Update lyrics during seek if in lyrics mode
             if (this.isVinylMode && this.vinylState === 'lyrics' && this.lyrics.length > 0) {
                 const seekLyricIndex = this.findCurrentLyricIndex(this.seekPosition);
+                
                 if (seekLyricIndex >= 0) {
+                    // Found a lyric at this position
                     this.currentLyricIndex = seekLyricIndex;
                     this.updateVinylLyrics();
                 } else {
-                    // No lyrics at this position - clear display
+                    // No lyrics at this position - but show first lyric as upcoming if available
                     this.currentLyricIndex = -1;
-                    this.previousLyric.textContent = '';
-                    this.currentLyric.textContent = '';
-                    this.nextLyric.textContent = '';
-                    this.previousLyric.classList.remove('visible');
-                    this.nextLyric.classList.remove('visible');
+                    
+                    if (this.lyrics.length > 0) {
+                        // Show first lyric as upcoming during instrumental intro
+                        this.updateVinylLyrics();
+                    } else {
+                        // No lyrics available at all - clear display
+                        this.previousLyric.textContent = '';
+                        this.currentLyric.textContent = '';
+                        this.nextLyric.textContent = '';
+                        this.previousLyric.classList.remove('visible');
+                        this.nextLyric.classList.remove('visible');
+                    }
+                    
+                    console.log('Showing upcoming lyric during intro at position:', this.formatTime(this.seekPosition));
                 }
             }
         }
@@ -676,11 +728,18 @@ class VinylKaraokeApp {
                     body: JSON.stringify({ position_ms: Math.floor(this.seekPosition) })
                 });
                 
-                // Block automatic updates briefly to prevent jumping
+                // Block ALL automatic updates for longer to prevent jumping
                 this.justSeeked = true;
+                
+                // Stop any smooth progress immediately and keep it stopped
+                this.stopSmoothProgress();
+                
                 setTimeout(() => {
+                    // Update our position to the seek position before allowing updates
+                    this.actualCurrentPosition = this.seekPosition;
+                    this.lastUpdateTime = Date.now();
                     this.justSeeked = false;
-                }, 1500); // Reduced to 1.5 seconds
+                }, 4000); // Increased to 4 seconds for more stability
                 
                 console.log('Seeked from', this.formatTime(this.gestureStartPosition), 'to', this.formatTime(this.seekPosition));
             } catch (error) {
