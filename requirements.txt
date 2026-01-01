@@ -1,0 +1,4 @@
+flask==3.1.2
+spotipy==2.25.2
+requests==2.32.5
+python-dotenv==1.0.1
