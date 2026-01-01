@@ -85,3 +85,14 @@ class SpotifyService:
             return jsonify({'action': 'previous'})
         except Exception as e:
             return jsonify({'error': str(e)})
+    
+    def seek_to_position(self, position_ms):
+        """Seek to specific position in current track"""
+        if not self.sp:
+            return jsonify({'error': 'Spotify not connected'})
+        
+        try:
+            self.sp.seek_track(position_ms)
+            return jsonify({'action': 'seek', 'position_ms': position_ms})
+        except Exception as e:
+            return jsonify({'error': str(e)})

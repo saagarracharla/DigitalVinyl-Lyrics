@@ -46,6 +46,14 @@ class VinylKaraokeApp {
         this.progressRing = document.getElementById('progressRing');
         this.progressCircumference = 2 * Math.PI * 535; // radius = 535
         
+        // Touch gesture properties
+        this.isDragging = false;
+        this.totalAngleChange = 0; // Track cumulative angle change
+        this.lastAngle = 0;
+        this.centerX = 0;
+        this.centerY = 0;
+        this.seekPosition = 0;
+        
         // Buttons
         this.vinylBtn = document.getElementById('vinylBtn');
         this.refreshBtn = document.getElementById('refreshBtn');
@@ -59,6 +67,17 @@ class VinylKaraokeApp {
         this.prevBtn.addEventListener('click', () => this.previousTrack());
         this.playPauseBtn.addEventListener('click', () => this.playPause());
         this.nextBtn.addEventListener('click', () => this.nextTrack());
+        
+        // Touch gestures for vinyl circle
+        this.vinylCircle = document.querySelector('.vinyl-circle');
+        this.vinylCircle.addEventListener('touchstart', (e) => this.handleTouchStart(e));
+        this.vinylCircle.addEventListener('touchmove', (e) => this.handleTouchMove(e));
+        this.vinylCircle.addEventListener('touchend', (e) => this.handleTouchEnd(e));
+        
+        // Mouse events for desktop testing
+        this.vinylCircle.addEventListener('mousedown', (e) => this.handleMouseStart(e));
+        this.vinylCircle.addEventListener('mousemove', (e) => this.handleMouseMove(e));
+        this.vinylCircle.addEventListener('mouseup', (e) => this.handleMouseEnd(e));
     }
     
     startPolling() {
@@ -419,6 +438,152 @@ class VinylKaraokeApp {
         } catch (error) {
             console.error('Previous track error:', error);
         }
+    }
+    
+    // TOUCH GESTURE HANDLERS
+    handleTouchStart(e) {
+        if (!this.isVinylMode || !this.currentTrack) return;
+        
+        e.preventDefault();
+        const touch = e.touches[0];
+        this.startGesture(touch.clientX, touch.clientY);
+    }
+    
+    handleTouchMove(e) {
+        if (!this.isDragging) return;
+        
+        e.preventDefault();
+        const touch = e.touches[0];
+        this.updateGesture(touch.clientX, touch.clientY);
+    }
+    
+    handleTouchEnd(e) {
+        if (!this.isDragging) return;
+        
+        e.preventDefault();
+        this.endGesture();
+    }
+    
+    // MOUSE HANDLERS (for desktop testing)
+    handleMouseStart(e) {
+        if (!this.isVinylMode || !this.currentTrack) return;
+        
+        e.preventDefault();
+        this.startGesture(e.clientX, e.clientY);
+    }
+    
+    handleMouseMove(e) {
+        if (!this.isDragging) return;
+        
+        e.preventDefault();
+        this.updateGesture(e.clientX, e.clientY);
+    }
+    
+    handleMouseEnd(e) {
+        if (!this.isDragging) return;
+        
+        e.preventDefault();
+        this.endGesture();
+    }
+    
+    startGesture(x, y) {
+        this.isDragging = true;
+        this.totalAngleChange = 0;
+        
+        // Get vinyl circle center
+        const rect = this.vinylCircle.getBoundingClientRect();
+        this.centerX = rect.left + rect.width / 2;
+        this.centerY = rect.top + rect.height / 2;
+        
+        // Calculate starting angle
+        this.lastAngle = this.getAngle(x, y);
+        
+        // Show timestamp and enter seeking mode
+        this.seekTimestamp = document.getElementById('seekTimestamp');
+        this.seekTimestamp.classList.add('visible');
+        
+        // Visual feedback: clear album art, counterclockwise spin
+        this.albumArt.classList.add('seeking');
+        this.albumOverlay.classList.remove('visible');
+        
+        console.log('Started seeking gesture');
+    }
+    
+    updateGesture(x, y) {
+        const currentAngle = this.getAngle(x, y);
+        let angleDiff = currentAngle - this.lastAngle;
+        
+        // Handle angle wraparound (crossing 180/-180 boundary)
+        if (angleDiff > 180) angleDiff -= 360;
+        if (angleDiff < -180) angleDiff += 360;
+        
+        // Accumulate total angle change
+        this.totalAngleChange += angleDiff;
+        this.lastAngle = currentAngle;
+        
+        // Much more sensitive: 1 full circle = 3 seconds rewind
+        const rewindPerDegree = 3000 / 360; // 3 seconds per full circle
+        const rewindAmount = Math.max(0, -this.totalAngleChange * rewindPerDegree);
+        
+        if (this.currentTrack) {
+            const currentProgress = this.currentTrack.progress_ms || 0;
+            this.seekPosition = Math.max(0, currentProgress - rewindAmount);
+            
+            // Update visual progress
+            const progress = this.seekPosition / this.currentTrack.duration_ms;
+            const offset = this.progressCircumference - (progress * this.progressCircumference);
+            this.progressRing.style.strokeDashoffset = offset;
+            
+            // Rotate album art proportionally to gesture (counterclockwise)
+            this.albumArt.style.transform = `rotate(${this.totalAngleChange}deg)`;
+            
+            // Update timestamp display
+            this.seekTimestamp.textContent = this.formatTime(this.seekPosition);
+        }
+    }
+    
+    async endGesture() {
+        this.isDragging = false;
+        
+        // Hide timestamp and exit seeking mode
+        this.seekTimestamp.classList.remove('visible');
+        this.albumArt.classList.remove('seeking');
+        
+        // Reset album art transform and restore animation
+        this.albumArt.style.transform = '';
+        
+        // Restore previous state (blurred if in lyrics mode)
+        if (this.vinylState === 'lyrics') {
+            this.albumOverlay.classList.add('visible');
+        }
+        
+        // Seek to position if significant change (more than 0.5 second)
+        if (Math.abs(this.seekPosition - (this.currentTrack.progress_ms || 0)) > 500) {
+            try {
+                await fetch('/seek', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ position_ms: Math.floor(this.seekPosition) })
+                });
+                console.log('Seeked to:', this.formatTime(this.seekPosition));
+            } catch (error) {
+                console.error('Seek error:', error);
+            }
+        }
+        
+        console.log('Ended seeking gesture');
+    }
+    
+    getAngle(x, y) {
+        const dx = x - this.centerX;
+        const dy = y - this.centerY;
+        return Math.atan2(dy, dx) * (180 / Math.PI);
+    }
+    
+    formatTime(ms) {
+        const minutes = Math.floor(ms / 60000);
+        const seconds = Math.floor((ms % 60000) / 1000);
+        return `${minutes}:${seconds.toString().padStart(2, '0')}`;
     }
 }
 

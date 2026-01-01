@@ -43,6 +43,11 @@ def create_app():
     def previous_track():
         return spotify_service.previous_track()
     
+    @app.route('/seek', methods=['POST'])
+    def seek():
+        position_ms = request.json.get('position_ms', 0)
+        return spotify_service.seek_to_position(position_ms)
+    
     return app
 
 if __name__ == '__main__':
