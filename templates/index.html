@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🎤 Spotify Karaoke</title>
+    
+    <!-- CSS Layers -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/karaoke.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/speaker.css') }}">
+</head>
+<body>
+    <div class="safe-frame">
+        <div class="karaoke-mode">
+            <!-- Header -->
+            <div class="header">
+                <h1>🎤 Spotify Karaoke</h1>
+                <div class="status" id="status">
+                    🎵 Play a song in Spotify to start
+                </div>
+            </div>
+            
+            <!-- Progress Bar -->
+            <div class="progress-container" id="progressContainer" style="display: none;">
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progressFill"></div>
+                </div>
+            </div>
+            
+            <!-- Controls -->
+            <div class="controls">
+                <button class="btn" id="speakerBtn">Speaker Mode</button>
+                <button class="btn" id="refreshBtn">Refresh</button>
+            </div>
+            
+            <!-- Lyrics Container -->
+            <div class="lyrics-container" id="lyricsContainer">
+                <!-- Lyrics will be rendered here -->
+            </div>
+        </div>
+    </div>
+    
+    <!-- JavaScript Modules -->
+    <script src="{{ url_for('static', filename='js/engine.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/lyrics.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/speaker.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/moods/calm_drift.js') }}"></script>
+    
+    <!-- Main Application -->
+    <script>
+        // Initialize components
+        const engine = new TimingEngine();
+        const lyricsRenderer = new LyricsRenderer(document.getElementById('lyricsContainer'));
+        const speakerMode = new SpeakerMode();
+        
+        // UI elements
+        const statusEl = document.getElementById('status');
+        const progressContainer = document.getElementById('progressContainer');
+        const progressFill = document.getElementById('progressFill');
+        const speakerBtn = document.getElementById('speakerBtn');
+        const refreshBtn = document.getElementById('refreshBtn');
+        
+        // Engine event handlers
+        engine.on('trackChanged', (track) => {
+            statusEl.textContent = `🎵 ${track.artist} - ${track.title}`;
+            progressContainer.style.display = 'block';
+        });
+        
+        engine.on('lyricsLoaded', (lyrics) => {
+            lyricsRenderer.setLyrics(lyrics);
+        });
+        
+        engine.on('lyricsError', (error) => {
+            statusEl.textContent = `❌ No lyrics found`;
+            lyricsRenderer.clear();
+        });
+        
+        engine.on('lyricEnter', (data) => {
+            lyricsRenderer.setActiveLyric(data.index);
+            
+            // Update speaker mode
+            if (speakerMode.isActive) {
+                speakerMode.showLyric(data.line);
+            }
+        });
+        
+        engine.on('timingUpdate', (data) => {
+            progressFill.style.width = `${data.progress * 100}%`;
+        });
+        
+        engine.on('playbackStopped', () => {
+            statusEl.textContent = '🎵 Play a song in Spotify to start';
+            progressContainer.style.display = 'none';
+            lyricsRenderer.clear();
+            speakerMode.hideLyric();
+        });
+        
+        // UI event handlers
+        speakerBtn.addEventListener('click', () => {
+            speakerMode.toggle();
+            speakerBtn.classList.toggle('active', speakerMode.isActive);
+            speakerBtn.textContent = speakerMode.isActive ? 'Exit Speaker' : 'Speaker Mode';
+        });
+        
+        refreshBtn.addEventListener('click', () => {
+            location.reload();
+        });
+        
+        console.log('🎤 Spotify Karaoke initialized');
+    </script>
+</body>
+</html>
