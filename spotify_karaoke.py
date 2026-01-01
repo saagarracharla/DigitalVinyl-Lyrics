@@ -168,6 +168,19 @@ def index():
             overflow-x: hidden;
             box-shadow: 0 30px 60px rgba(0,0,0,0.6);
             scroll-behavior: smooth;
+            scrollbar-width: none;
+            -ms-overflow-style: none;
+        }
+        
+        .lyrics-stage::-webkit-scrollbar {
+            display: none;
+        }
+        
+        .lyrics-stage.calm-drift {
+            background: radial-gradient(ellipse at center, 
+                rgba(20, 20, 30, 0.95) 0%, 
+                rgba(10, 10, 15, 0.98) 100%);
+            backdrop-filter: blur(60px) saturate(1.2);
         }
         
         .lyrics-container {
@@ -175,46 +188,206 @@ def index():
             max-width: 800px;
             display: flex;
             flex-direction: column;
-            gap: 20px;
+            gap: 8px;
             padding: 20px 0;
         }
         
         .lyric-line {
-            font-family: 'Inter', sans-serif;
-            font-size: 1.8rem;
-            font-weight: 400;
-            line-height: 1.4;
-            padding: 15px 20px;
-            border-radius: 15px;
-            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-            opacity: 0.3;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            font-size: 1.6rem;
+            font-weight: 300;
+            line-height: 1.5;
+            padding: 20px 30px;
+            margin: 8px 0;
             text-align: center;
+            border-radius: 12px;
+            transition: all 1.2s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+            transform: translateY(0px) scale(1);
+            opacity: 0.25;
+            filter: blur(0.5px);
+            letter-spacing: 0.3px;
             cursor: pointer;
+        }
+        
+        .lyric-line.upcoming {
+            opacity: 0.25;
+            transform: translateY(8px) scale(0.96);
+            filter: blur(0.8px);
+            color: rgba(255, 255, 255, 0.4);
         }
         
         .lyric-line.active {
             opacity: 1;
-            background: linear-gradient(135deg, rgba(255, 107, 107, 0.1), rgba(78, 205, 196, 0.1));
-            border: 1px solid rgba(255, 107, 107, 0.3);
-            font-weight: 600;
-            font-size: 2.2rem;
-            transform: scale(1.02);
-            box-shadow: 0 10px 30px rgba(255, 107, 107, 0.2);
-            color: #ffffff;
+            transform: translateY(-2px) scale(1.02);
+            filter: blur(0px);
+            font-weight: 400;
+            font-size: 1.8rem;
+            color: rgba(255, 255, 255, 0.95);
+            background: linear-gradient(135deg, 
+                rgba(255, 255, 255, 0.03) 0%, 
+                rgba(255, 255, 255, 0.01) 100%);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            box-shadow: 
+                0 8px 32px rgba(0, 0, 0, 0.3),
+                inset 0 1px 0 rgba(255, 255, 255, 0.1);
+            animation: calmBreathe 4s ease-in-out infinite;
         }
         
         .lyric-line.passed {
-            opacity: 0.5;
-            color: #888;
+            opacity: 0.15;
+            transform: translateY(-4px) scale(0.94);
+            filter: blur(1px);
+            color: rgba(255, 255, 255, 0.25);
         }
         
-        .lyric-line.upcoming {
-            opacity: 0.3;
-            color: #666;
+        @keyframes calmBreathe {
+            0%, 100% { 
+                transform: translateY(-2px) scale(1.02);
+                opacity: 1;
+            }
+            50% { 
+                transform: translateY(-3px) scale(1.025);
+                opacity: 0.98;
+            }
         }
         
-        .current-line, .next-line {
+        .highlighted-word,
+        .upcoming-word,
+        .line-transition,
+        .current-line,
+        .next-line {
             display: none;
+        }
+        
+        /* NEW: Speaker Mode Visual Override */
+        body.speaker-mode {
+            background: radial-gradient(ellipse at center, 
+                rgba(8, 8, 12, 1) 0%, 
+                rgba(2, 2, 4, 1) 70%, 
+                rgba(0, 0, 0, 1) 100%);
+            overflow: hidden;
+        }
+
+        body.speaker-mode .header {
+            opacity: 0.1;
+            transform: scale(0.9);
+            transition: all 2s ease;
+        }
+
+        body.speaker-mode .track-info {
+            opacity: 0.15;
+            transform: translateY(-20px) scale(0.95);
+            background: transparent;
+            border: none;
+            box-shadow: none;
+            backdrop-filter: none;
+            transition: all 2s ease;
+        }
+
+        body.speaker-mode .track-info .progress-bar {
+            opacity: 0.2;
+            height: 2px;
+        }
+
+        body.speaker-mode .lyrics-stage {
+            background: transparent;
+            border: none;
+            box-shadow: none;
+            backdrop-filter: none;
+            padding: 200px 40px;
+            height: 600px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        body.speaker-mode .lyrics-container {
+            max-width: 900px;
+            gap: 40px;
+            align-items: center;
+            min-height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-start;
+            padding: 100px 0;
+        }
+
+        /* Speaker Mode Typography */
+        body.speaker-mode .lyric-line {
+            font-family: 'Playfair Display', 'Georgia', serif;
+            font-size: 2.4rem;
+            font-weight: 400;
+            line-height: 1.3;
+            padding: 30px 40px;
+            margin: 20px 0;
+            letter-spacing: 0.5px;
+            background: transparent;
+            border: none;
+            border-radius: 0;
+            transition: all 2s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+            max-width: 85%;
+        }
+
+        body.speaker-mode .lyric-line.upcoming {
+            opacity: 0.12;
+            transform: translateY(20px) scale(0.92);
+            filter: blur(2px);
+            color: rgba(255, 255, 255, 0.15);
+        }
+
+        body.speaker-mode .lyric-line.active {
+            opacity: 1;
+            transform: translateY(0px) scale(1);
+            filter: blur(0px);
+            font-weight: 500;
+            font-size: 3.2rem;
+            color: rgba(255, 255, 255, 0.98);
+            background: transparent;
+            border: none;
+            box-shadow: none;
+            animation: speakerBreathe 6s ease-in-out infinite;
+            text-shadow: 0 2px 40px rgba(255, 255, 255, 0.1);
+        }
+
+        body.speaker-mode .lyric-line.passed {
+            opacity: 0.08;
+            transform: translateY(-30px) scale(0.88);
+            filter: blur(3px);
+            color: rgba(255, 255, 255, 0.08);
+        }
+
+        /* Speaker Mode Breathing Animation */
+        @keyframes speakerBreathe {
+            0%, 100% { 
+                transform: translateY(0px) scale(1);
+                opacity: 1;
+            }
+            50% { 
+                transform: translateY(-2px) scale(1.008);
+                opacity: 0.96;
+            }
+        }
+
+        /* Hide UI elements in speaker mode */
+        body.speaker-mode .music-visualizer {
+            opacity: 0.05;
+        }
+
+        body.speaker-mode .status {
+            opacity: 0.1;
+        }
+
+        /* Responsive adjustments for speaker mode */
+        @media (max-width: 768px) {
+            body.speaker-mode .lyric-line {
+                font-size: 2rem;
+                max-width: 90%;
+            }
+            
+            body.speaker-mode .lyric-line.active {
+                font-size: 2.6rem;
+            }
         }
         
         .highlighted-word {
@@ -317,6 +490,25 @@ def index():
 </head>
 <body>
     <div class="status" id="status">🎵 Loading...</div>
+    
+    <!-- NEW: Speaker Mode Toggle Button -->
+    <button id="speakerToggle" onclick="toggleSpeakerMode()" style="
+        position: fixed;
+        bottom: 30px;
+        right: 30px;
+        background: rgba(255,255,255,0.1);
+        border: 1px solid rgba(255,255,255,0.2);
+        color: white;
+        padding: 12px 20px;
+        border-radius: 25px;
+        cursor: pointer;
+        font-size: 0.9rem;
+        backdrop-filter: blur(20px);
+        transition: all 0.3s ease;
+        z-index: 1000;
+    ">
+        🔊 Speaker Mode
+    </button>
     
     <div class="container">
         <div class="header">
@@ -422,25 +614,72 @@ def index():
                 }
             }
             
-            // Update all line states
+            // Apply calm-drift animation classes
             const allLines = document.querySelectorAll('.lyric-line');
             allLines.forEach((line, index) => {
+                // Remove all state classes
                 line.classList.remove('active', 'passed', 'upcoming');
                 
-                if (index === currentLineIndex) {
-                    line.classList.add('active');
-                    // Scroll to current line
-                    line.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                } else if (index < currentLineIndex) {
-                    line.classList.add('passed');
-                } else {
-                    line.classList.add('upcoming');
-                }
+                // Add appropriate state class with subtle stagger
+                const delay = Math.abs(index - currentLineIndex) * 30;
+                setTimeout(() => {
+                    if (index === currentLineIndex) {
+                        line.classList.add('active');
+                        line.scrollIntoView({ 
+                            behavior: 'smooth', 
+                            block: 'center',
+                            inline: 'center'
+                        });
+                    } else if (index < currentLineIndex) {
+                        line.classList.add('passed');
+                    } else {
+                        line.classList.add('upcoming');
+                    }
+                }, delay);
             });
         }
 
+        function initializeCalmDrift() {
+            const lyricsStage = document.querySelector('.lyrics-stage');
+            if (lyricsStage) {
+                lyricsStage.classList.add('calm-drift');
+            }
+        }
+
+        // NEW: Speaker Mode Toggle Function
+        function toggleSpeakerMode() {
+            document.body.classList.toggle('speaker-mode');
+            
+            // Force scroll recalculation after mode change
+            setTimeout(() => {
+                const activeLine = document.querySelector('.lyric-line.active');
+                if (activeLine) {
+                    activeLine.scrollIntoView({ 
+                        behavior: 'smooth', 
+                        block: 'center',
+                        inline: 'center'
+                    });
+                }
+            }, 100);
+        }
+
+        // NEW: Auto-enable speaker mode (optional)
+        function initializeSpeakerMode() {
+            // Uncomment to enable speaker mode by default:
+            // document.body.classList.add('speaker-mode');
+        }
+
+        // NEW: Add keyboard shortcut for speaker mode
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 's' || e.key === 'S') {
+                toggleSpeakerMode();
+            }
+        });
+
         setInterval(updateAll, 500);
         updateAll();
+        initializeCalmDrift();
+        initializeSpeakerMode();
     </script>
 </body>
 </html>
