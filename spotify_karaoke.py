@@ -294,79 +294,98 @@ def index():
             border: none;
             box-shadow: none;
             backdrop-filter: none;
-            padding: 200px 40px;
-            height: 600px;
-            overflow-y: auto;
+            padding: 0;
+            height: 100vh;
+            overflow: hidden;
             display: flex;
             flex-direction: column;
             align-items: center;
+            justify-content: center;
         }
 
         body.speaker-mode .lyrics-container {
-            max-width: 900px;
-            gap: 40px;
+            max-width: none;
+            gap: 0;
             align-items: center;
-            min-height: 100%;
+            min-height: auto;
             display: flex;
             flex-direction: column;
-            justify-content: flex-start;
-            padding: 100px 0;
+            justify-content: center;
+            padding: 0;
+            width: 100%;
+            height: 100%;
         }
 
         /* Speaker Mode Typography */
         body.speaker-mode .lyric-line {
             font-family: 'Playfair Display', 'Georgia', serif;
-            font-size: 2.4rem;
+            font-size: 3.5rem;
             font-weight: 400;
             line-height: 1.3;
-            padding: 30px 40px;
-            margin: 20px 0;
-            letter-spacing: 0.5px;
+            padding: 40px;
+            margin: 0;
+            letter-spacing: 0.3px;
             background: transparent;
             border: none;
             border-radius: 0;
             transition: all 2s cubic-bezier(0.25, 0.46, 0.45, 0.94);
-            max-width: 85%;
+            text-align: center;
+            opacity: 0;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: var(--locked-width, auto);
+            white-space: normal;
+            word-break: keep-all;
         }
 
         body.speaker-mode .lyric-line.upcoming {
-            opacity: 0.12;
-            transform: translateY(20px) scale(0.92);
-            filter: blur(2px);
-            color: rgba(255, 255, 255, 0.15);
+            opacity: 0;
         }
 
         body.speaker-mode .lyric-line.active {
             opacity: 1;
-            transform: translateY(0px) scale(1);
+            transform: translate(calc(-50% + var(--line-x, 0px)), calc(-50% + var(--line-y, 0px))) 
+                       scale(var(--line-scale, 1)) 
+                       rotate(var(--line-rotate, 0deg));
             filter: blur(0px);
             font-weight: 500;
-            font-size: 3.2rem;
-            color: rgba(255, 255, 255, 0.98);
+            color: rgba(255, 255, 255, var(--line-opacity, 0.98));
             background: transparent;
             border: none;
             box-shadow: none;
             animation: speakerBreathe 6s ease-in-out infinite;
             text-shadow: 0 2px 40px rgba(255, 255, 255, 0.1);
+            letter-spacing: var(--line-spacing, 0.3px);
         }
 
         body.speaker-mode .lyric-line.passed {
-            opacity: 0.08;
-            transform: translateY(-30px) scale(0.88);
-            filter: blur(3px);
-            color: rgba(255, 255, 255, 0.08);
+            opacity: 0;
         }
 
         /* Speaker Mode Breathing Animation */
         @keyframes speakerBreathe {
             0%, 100% { 
-                transform: translateY(0px) scale(1);
-                opacity: 1;
+                transform: translate(calc(-50% + var(--line-x, 0px)), calc(-50% + var(--line-y, 0px))) 
+                           scale(var(--line-scale, 1)) 
+                           rotate(var(--line-rotate, 0deg));
+                opacity: var(--line-opacity, 0.98);
             }
             50% { 
-                transform: translateY(-2px) scale(1.008);
-                opacity: 0.96;
+                transform: translate(calc(-50% + var(--line-x, 0px)), calc(-50% + var(--line-y, 0px))) 
+                           scale(calc(var(--line-scale, 1) * 1.02)) 
+                           rotate(var(--line-rotate, 0deg));
+                opacity: calc(var(--line-opacity, 0.98) * 0.96);
             }
+        }
+
+        /* Intra-line word emphasis */
+        body.speaker-mode .lyric-line.active .emphasis-word {
+            font-weight: 700;
+            transform: scale(1.1);
+            opacity: 1;
+            display: inline-block;
         }
 
         /* Hide UI elements in speaker mode */
@@ -625,11 +644,88 @@ def index():
                 setTimeout(() => {
                     if (index === currentLineIndex) {
                         line.classList.add('active');
-                        line.scrollIntoView({ 
-                            behavior: 'smooth', 
-                            block: 'center',
-                            inline: 'center'
-                        });
+                        
+                        // Lock width and add spatial composition for speaker mode
+                        if (document.body.classList.contains('speaker-mode')) {
+                            // Measure and lock width to prevent reflow
+                            line.style.width = 'auto';
+                            const naturalWidth = line.offsetWidth;
+                            line.style.setProperty('--locked-width', `${naturalWidth}px`);
+                            
+                            // Deterministic randomness based on line content
+                            const seed = line.textContent.length + index;
+                            const random1 = Math.abs(Math.sin(seed * 12.9898) * 43758.5453) % 1;
+                            const random2 = Math.abs(Math.sin(seed * 78.233) * 43758.5453) % 1;
+                            const random3 = Math.abs(Math.sin(seed * 37.719) * 43758.5453) % 1;
+                            const random4 = Math.abs(Math.sin(seed * 93.456) * 43758.5453) % 1;
+                            const random5 = Math.abs(Math.sin(seed * 15.789) * 43758.5453) % 1;
+                            
+                            // Spatial placement system
+                            const placements = [
+                                { x: 0, y: 0 },           // center
+                                { x: -200, y: 0 },        // left third
+                                { x: 200, y: 0 },         // right third
+                                { x: -100, y: -120 },     // upper left
+                                { x: 100, y: -120 },      // upper right
+                                { x: -100, y: 120 },      // lower left
+                                { x: 100, y: 120 }       // lower right
+                            ];
+                            const placement = placements[Math.floor(random1 * placements.length)];
+                            
+                            // Size variation (3 tiers)
+                            const sizeTiers = [1.2, 0.9, 0.7]; // large, medium, small
+                            const sizeScale = sizeTiers[Math.floor(random2 * sizeTiers.length)];
+                            
+                            // Subtle rotation (occasionally)
+                            const rotation = random3 > 0.7 ? (random4 - 0.5) * 8 : 0; // ±4 degrees, 30% chance
+                            
+                            // Apply spatial composition
+                            line.style.setProperty('--line-x', `${placement.x}px`);
+                            line.style.setProperty('--line-y', `${placement.y}px`);
+                            line.style.setProperty('--line-scale', sizeScale);
+                            line.style.setProperty('--line-rotate', `${rotation}deg`);
+                            line.style.setProperty('--line-spacing', `${0.3 + (random5 - 0.5) * 0.4}px`);
+                            line.style.setProperty('--line-opacity', 0.95 + (random1 * 0.06));
+                            
+                            // Intra-line word emphasis
+                            const words = line.textContent.split(' ');
+                            if (words.length > 2) {
+                                const emphasisCount = Math.floor(random2 * 2) + 1; // 1-2 words
+                                const emphasizedWords = [];
+                                
+                                for (let i = 0; i < emphasisCount; i++) {
+                                    const wordIndex = Math.floor((random3 + i * 0.3) * words.length) % words.length;
+                                    if (!emphasizedWords.includes(wordIndex)) {
+                                        emphasizedWords.push(wordIndex);
+                                    }
+                                }
+                                
+                                const newHTML = words.map((word, idx) => {
+                                    if (emphasizedWords.includes(idx)) {
+                                        return `<span class="emphasis-word">${word}</span>`;
+                                    }
+                                    return word;
+                                }).join(' ');
+                                
+                                line.innerHTML = newHTML;
+                            }
+                        } else {
+                            // Reset variations in normal mode
+                            line.innerHTML = line.textContent; // Remove emphasis spans
+                            line.style.removeProperty('--locked-width');
+                            line.style.removeProperty('--line-scale');
+                            line.style.removeProperty('--line-x');
+                            line.style.removeProperty('--line-y');
+                            line.style.removeProperty('--line-rotate');
+                            line.style.removeProperty('--line-spacing');
+                            line.style.removeProperty('--line-opacity');
+                            
+                            line.scrollIntoView({ 
+                                behavior: 'smooth', 
+                                block: 'center',
+                                inline: 'center'
+                            });
+                        }
                     } else if (index < currentLineIndex) {
                         line.classList.add('passed');
                     } else {
