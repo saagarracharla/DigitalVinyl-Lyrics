@@ -53,6 +53,8 @@ class VinylKaraokeApp {
         this.centerX = 0;
         this.centerY = 0;
         this.seekPosition = 0;
+        this.justSeeked = false; // Track if we just performed a seek
+        this.actualCurrentPosition = 0; // Track the real current position
         
         // Buttons
         this.vinylBtn = document.getElementById('vinylBtn');
@@ -205,13 +207,20 @@ class VinylKaraokeApp {
         const currentTime = trackData.progress_ms;
         const progress = trackData.progress_ms / trackData.duration_ms;
         
-        // Update progress bar
-        this.progressFill.style.width = `${progress * 100}%`;
+        // Update our tracked position
+        if (!this.isDragging) {
+            this.actualCurrentPosition = currentTime;
+        }
         
-        // Update circular progress ring in vinyl mode
-        if (this.isVinylMode) {
-            const offset = this.progressCircumference - (progress * this.progressCircumference);
-            this.progressRing.style.strokeDashoffset = offset;
+        // Update progress bar only if not currently dragging and not recently seeked
+        if (!this.isDragging && !this.justSeeked) {
+            this.progressFill.style.width = `${progress * 100}%`;
+            
+            // Update circular progress ring in vinyl mode
+            if (this.isVinylMode) {
+                const offset = this.progressCircumference - (progress * this.progressCircumference);
+                this.progressRing.style.strokeDashoffset = offset;
+            }
         }
         
         // Find current lyric
@@ -490,6 +499,9 @@ class VinylKaraokeApp {
         this.isDragging = true;
         this.totalAngleChange = 0;
         
+        // Use the actual current position (including any previous seeks)
+        this.gestureStartPosition = this.actualCurrentPosition;
+        
         // Get vinyl circle center
         const rect = this.vinylCircle.getBoundingClientRect();
         this.centerX = rect.left + rect.width / 2;
@@ -502,11 +514,11 @@ class VinylKaraokeApp {
         this.seekTimestamp = document.getElementById('seekTimestamp');
         this.seekTimestamp.classList.add('visible');
         
-        // Visual feedback: clear album art, counterclockwise spin
+        // Visual feedback: clear album art
         this.albumArt.classList.add('seeking');
         this.albumOverlay.classList.remove('visible');
         
-        console.log('Started seeking gesture');
+        console.log('Started seeking from position:', this.formatTime(this.gestureStartPosition));
     }
     
     updateGesture(x, y) {
@@ -521,20 +533,25 @@ class VinylKaraokeApp {
         this.totalAngleChange += angleDiff;
         this.lastAngle = currentAngle;
         
-        // Much more sensitive: 1 full circle = 3 seconds rewind
-        const rewindPerDegree = 3000 / 360; // 3 seconds per full circle
-        const rewindAmount = Math.max(0, -this.totalAngleChange * rewindPerDegree);
+        // Much more responsive bidirectional seeking: 1 full circle = 30 seconds
+        const seekPerDegree = 30000 / 360; // 30 seconds per full circle
+        const seekAmount = this.totalAngleChange * seekPerDegree;
         
         if (this.currentTrack) {
-            const currentProgress = this.currentTrack.progress_ms || 0;
-            this.seekPosition = Math.max(0, currentProgress - rewindAmount);
+            const newPosition = this.gestureStartPosition + seekAmount; // Use gesture start position
+            
+            // Clamp to song bounds
+            this.seekPosition = Math.max(0, Math.min(this.currentTrack.duration_ms, newPosition));
+            
+            // Update our tracked position during drag
+            this.actualCurrentPosition = this.seekPosition;
             
             // Update visual progress
             const progress = this.seekPosition / this.currentTrack.duration_ms;
             const offset = this.progressCircumference - (progress * this.progressCircumference);
             this.progressRing.style.strokeDashoffset = offset;
             
-            // Rotate album art proportionally to gesture (counterclockwise)
+            // Rotate album art proportionally to gesture
             this.albumArt.style.transform = `rotate(${this.totalAngleChange}deg)`;
             
             // Update timestamp display
@@ -558,14 +575,28 @@ class VinylKaraokeApp {
         }
         
         // Seek to position if significant change (more than 0.5 second)
-        if (Math.abs(this.seekPosition - (this.currentTrack.progress_ms || 0)) > 500) {
+        if (Math.abs(this.seekPosition - this.gestureStartPosition) > 500) {
             try {
+                // Keep progress bar at seek position immediately
+                const seekProgress = this.seekPosition / this.currentTrack.duration_ms;
+                const seekOffset = this.progressCircumference - (seekProgress * this.progressCircumference);
+                this.progressRing.style.strokeDashoffset = seekOffset;
+                this.progressFill.style.width = `${seekProgress * 100}%`;
+                
                 await fetch('/seek', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ position_ms: Math.floor(this.seekPosition) })
                 });
-                console.log('Seeked to:', this.formatTime(this.seekPosition));
+                
+                // Prevent progress bar updates for 3 seconds to avoid jumping
+                this.justSeeked = true;
+                setTimeout(() => {
+                    this.justSeeked = false;
+                }, 3000);
+                
+                // Update our tracked position to the seek position
+                this.actualCurrentPosition = this.seekPosition;
             } catch (error) {
                 console.error('Seek error:', error);
             }
