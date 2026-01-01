@@ -134,11 +134,15 @@ class VinylKaraokeApp {
         this.currentTrack = trackData;
         this.currentLyricIndex = -1;
         
+        // Clear old lyrics immediately to prevent showing previous song lyrics
+        this.lyrics = [];
+        this.clearLyrics();
+        
         // Update UI
         this.statusEl.textContent = `🎵 ${trackData.artist} - ${trackData.track_name}`;
         this.progressContainer.style.display = 'block';
         
-        // Vinyl Mode: Show track info and album art
+        // Vinyl Mode: Always start with clear album art and track info
         if (this.isVinylMode) {
             this.showVinylTrackInfo(trackData);
         }
@@ -156,17 +160,23 @@ class VinylKaraokeApp {
                 this.lyrics = data.lines;
                 this.renderLyrics();
                 
-                // Vinyl Mode: Transition to lyrics after delay
+                // Vinyl Mode: Transition to lyrics after 5 seconds
                 if (this.isVinylMode) {
-                    setTimeout(() => this.transitionToVinylLyrics(), 4000); // Longer delay to show album art
+                    setTimeout(() => this.transitionToVinylLyrics(), 5000);
                 }
             } else {
                 this.lyrics = [];
                 this.statusEl.textContent = '❌ No lyrics found';
+                
+                // Vinyl Mode: Keep showing album art and track info (no transition)
+                console.log('No lyrics found - staying in track info mode');
             }
         } catch (error) {
             console.error('Lyrics error:', error);
             this.lyrics = [];
+            
+            // Vinyl Mode: Keep showing album art and track info on error
+            console.log('Lyrics error - staying in track info mode');
         }
     }
     
@@ -283,26 +293,38 @@ class VinylKaraokeApp {
     }
     
     showVinylTrackInfo(trackData) {
+        // Reset to track info state with clear album art
         this.vinylState = 'track-info';
+        
+        // Clear any existing lyrics display immediately
+        this.previousLyric.textContent = '';
+        this.currentLyric.textContent = '';
+        this.nextLyric.textContent = '';
+        this.previousLyric.classList.remove('visible');
+        this.nextLyric.classList.remove('visible');
         
         // Set album art
         if (trackData.album_art) {
             this.albumArt.style.backgroundImage = `url(${trackData.album_art})`;
         }
         
+        // Ensure album art is clear (not blurred)
+        this.albumArt.classList.remove('blurred');
+        this.albumOverlay.classList.remove('visible');
+        
         // Set track info
         this.vinylArtist.textContent = trackData.artist;
         this.vinylTitle.textContent = trackData.track_name;
         
-        // Show track info
+        // Show track info, hide lyrics
         this.trackInfo.classList.add('visible');
         this.lyricDisplay.classList.remove('visible');
         
-        console.log('Vinyl: Showing track info');
+        console.log('Vinyl: Showing clear album art with track info');
     }
     
     transitionToVinylLyrics() {
-        if (this.vinylState !== 'track-info') return;
+        if (this.vinylState !== 'track-info' || this.lyrics.length === 0) return;
         
         this.vinylState = 'lyrics';
         
@@ -319,7 +341,7 @@ class VinylKaraokeApp {
             this.updateVinylLyrics();
         }
         
-        console.log('Vinyl: Transitioned to lyrics mode');
+        console.log('Vinyl: Transitioned to lyrics mode with blurred background');
     }
     
     updateVinylLyrics() {
