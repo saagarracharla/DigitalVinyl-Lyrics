@@ -23,7 +23,7 @@ class LyricsService:
             print(f"Lyrics error: {e}")
         
         # Fallback for no lyrics
-        return jsonify({'lines': [{'startTimeMs': 0, 'words': f'🎵 No lyrics found for {track}'}]})
+        return jsonify({'lines': []})
     
     def _parse_lrc_content(self, lrc_text):
         """Parse LRC format - exact copy from working version"""

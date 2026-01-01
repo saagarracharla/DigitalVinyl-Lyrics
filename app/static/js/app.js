@@ -55,6 +55,8 @@ class VinylKaraokeApp {
         this.seekPosition = 0;
         this.justSeeked = false; // Track if we just performed a seek
         this.actualCurrentPosition = 0; // Track the real current position
+        this.lastUpdateTime = 0; // For smooth progress interpolation
+        this.smoothProgressInterval = null; // Smooth progress animation
         
         // Buttons
         this.vinylBtn = document.getElementById('vinylBtn');
@@ -136,8 +138,13 @@ class VinylKaraokeApp {
     }
     
     handleNoPlayback() {
-        this.statusEl.textContent = '🎵 Play a song in Spotify to start';
+        if (!this.isVinylMode) {
+            this.statusEl.textContent = '🎵 Play a song in Spotify to start';
+        }
         this.progressContainer.style.display = 'none';
+        
+        // Stop smooth progress animation
+        this.stopSmoothProgress();
         
         if (this.isVinylMode && this.vinylState === 'lyrics') {
             console.log('Paused - showing track info');
@@ -159,8 +166,10 @@ class VinylKaraokeApp {
         this.lyrics = [];
         this.clearLyrics();
         
-        // Update UI
-        this.statusEl.textContent = `🎵 ${trackData.artist} - ${trackData.track_name}`;
+        // Update UI only in normal mode
+        if (!this.isVinylMode) {
+            this.statusEl.textContent = `🎵 ${trackData.artist} - ${trackData.track_name}`;
+        }
         this.progressContainer.style.display = 'block';
         
         // Vinyl Mode: Always start with clear album art and track info
@@ -187,7 +196,11 @@ class VinylKaraokeApp {
                 }
             } else {
                 this.lyrics = [];
-                this.statusEl.textContent = '❌ No lyrics found';
+                
+                // Show "No lyrics found" only in normal mode
+                if (!this.isVinylMode) {
+                    this.statusEl.textContent = '❌ No lyrics found';
+                }
                 
                 // Vinyl Mode: Keep showing album art and track info (no transition)
                 console.log('No lyrics found - staying in track info mode');
@@ -196,39 +209,88 @@ class VinylKaraokeApp {
             console.error('Lyrics error:', error);
             this.lyrics = [];
             
+            // Show error only in normal mode
+            if (!this.isVinylMode) {
+                this.statusEl.textContent = '❌ Lyrics error';
+            }
+            
             // Vinyl Mode: Keep showing album art and track info on error
             console.log('Lyrics error - staying in track info mode');
         }
     }
     
     updateTiming(trackData) {
-        if (!this.lyrics.length) return;
-        
         const currentTime = trackData.progress_ms;
         const progress = trackData.progress_ms / trackData.duration_ms;
         
-        // Update our tracked position
+        // Always update our tracked position when not dragging
         if (!this.isDragging) {
             this.actualCurrentPosition = currentTime;
+            this.lastUpdateTime = Date.now();
         }
         
-        // Update progress bar only if not currently dragging and not recently seeked
+        // Update progress bars ONLY if we're not dragging and haven't recently seeked
         if (!this.isDragging && !this.justSeeked) {
-            this.progressFill.style.width = `${progress * 100}%`;
+            this.updateProgressBars(progress);
             
-            // Update circular progress ring in vinyl mode
-            if (this.isVinylMode) {
-                const offset = this.progressCircumference - (progress * this.progressCircumference);
-                this.progressRing.style.strokeDashoffset = offset;
+            // Start smooth progress if not already running
+            if (!this.smoothProgressInterval) {
+                this.startSmoothProgress(trackData.duration_ms);
             }
         }
         
-        // Find current lyric
-        const newIndex = this.findCurrentLyricIndex(currentTime);
+        // Find current lyric only if we have lyrics
+        if (this.lyrics.length > 0) {
+            const newIndex = this.findCurrentLyricIndex(currentTime);
+            
+            if (newIndex !== this.currentLyricIndex) {
+                this.currentLyricIndex = newIndex;
+                this.updateActiveLyric();
+            }
+        }
+    }
+    
+    updateProgressBars(progress) {
+        if (this.progressFill) {
+            this.progressFill.style.width = `${progress * 100}%`;
+        }
         
-        if (newIndex !== this.currentLyricIndex) {
-            this.currentLyricIndex = newIndex;
-            this.updateActiveLyric();
+        if (this.isVinylMode && this.progressRing) {
+            const offset = this.progressCircumference - (progress * this.progressCircumference);
+            this.progressRing.style.strokeDashoffset = offset;
+        }
+    }
+    
+    startSmoothProgress(duration) {
+        // Clear any existing interval
+        if (this.smoothProgressInterval) {
+            clearInterval(this.smoothProgressInterval);
+        }
+        
+        // Don't start if we're dragging or just seeked
+        if (this.isDragging || this.justSeeked) {
+            return;
+        }
+        
+        this.smoothProgressInterval = setInterval(() => {
+            if (this.isDragging || this.justSeeked || !this.currentTrack) {
+                return; // Don't update during gestures or recent seeks
+            }
+            
+            // Calculate interpolated position
+            const timeSinceUpdate = Date.now() - this.lastUpdateTime;
+            const interpolatedPosition = this.actualCurrentPosition + timeSinceUpdate;
+            const interpolatedProgress = Math.min(1, interpolatedPosition / duration);
+            
+            // Update progress bars smoothly
+            this.updateProgressBars(interpolatedProgress);
+        }, 50); // Update every 50ms for smooth animation
+    }
+    
+    stopSmoothProgress() {
+        if (this.smoothProgressInterval) {
+            clearInterval(this.smoothProgressInterval);
+            this.smoothProgressInterval = null;
         }
     }
     
@@ -298,6 +360,9 @@ class VinylKaraokeApp {
         document.body.classList.add('vinyl-active');
         this.vinylMode.style.display = 'flex';
         this.vinylState = 'idle';
+        
+        // Clear any status messages when entering vinyl mode
+        this.statusEl.textContent = '';
         
         // If track is playing, show track info
         if (this.currentTrack) {
@@ -499,6 +564,9 @@ class VinylKaraokeApp {
         this.isDragging = true;
         this.totalAngleChange = 0;
         
+        // Stop smooth progress animation during gesture
+        this.stopSmoothProgress();
+        
         // Use the actual current position (including any previous seeks)
         this.gestureStartPosition = this.actualCurrentPosition;
         
@@ -546,16 +614,32 @@ class VinylKaraokeApp {
             // Update our tracked position during drag
             this.actualCurrentPosition = this.seekPosition;
             
-            // Update visual progress
+            // Update visual progress during gesture
             const progress = this.seekPosition / this.currentTrack.duration_ms;
-            const offset = this.progressCircumference - (progress * this.progressCircumference);
-            this.progressRing.style.strokeDashoffset = offset;
+            this.updateProgressBars(progress);
             
             // Rotate album art proportionally to gesture
             this.albumArt.style.transform = `rotate(${this.totalAngleChange}deg)`;
             
             // Update timestamp display
             this.seekTimestamp.textContent = this.formatTime(this.seekPosition);
+            
+            // Update lyrics during seek if in lyrics mode
+            if (this.isVinylMode && this.vinylState === 'lyrics' && this.lyrics.length > 0) {
+                const seekLyricIndex = this.findCurrentLyricIndex(this.seekPosition);
+                if (seekLyricIndex >= 0) {
+                    this.currentLyricIndex = seekLyricIndex;
+                    this.updateVinylLyrics();
+                } else {
+                    // No lyrics at this position - clear display
+                    this.currentLyricIndex = -1;
+                    this.previousLyric.textContent = '';
+                    this.currentLyric.textContent = '';
+                    this.nextLyric.textContent = '';
+                    this.previousLyric.classList.remove('visible');
+                    this.nextLyric.classList.remove('visible');
+                }
+            }
         }
     }
     
@@ -577,26 +661,28 @@ class VinylKaraokeApp {
         // Seek to position if significant change (more than 0.5 second)
         if (Math.abs(this.seekPosition - this.gestureStartPosition) > 500) {
             try {
-                // Keep progress bar at seek position immediately
+                // Lock progress bar at seek position immediately
                 const seekProgress = this.seekPosition / this.currentTrack.duration_ms;
-                const seekOffset = this.progressCircumference - (seekProgress * this.progressCircumference);
-                this.progressRing.style.strokeDashoffset = seekOffset;
-                this.progressFill.style.width = `${seekProgress * 100}%`;
+                this.updateProgressBars(seekProgress);
                 
+                // Update tracked position immediately
+                this.actualCurrentPosition = this.seekPosition;
+                this.lastUpdateTime = Date.now();
+                
+                // Send seek command to Spotify
                 await fetch('/seek', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ position_ms: Math.floor(this.seekPosition) })
                 });
                 
-                // Prevent progress bar updates for 3 seconds to avoid jumping
+                // Block automatic updates briefly to prevent jumping
                 this.justSeeked = true;
                 setTimeout(() => {
                     this.justSeeked = false;
-                }, 3000);
+                }, 1500); // Reduced to 1.5 seconds
                 
-                // Update our tracked position to the seek position
-                this.actualCurrentPosition = this.seekPosition;
+                console.log('Seeked from', this.formatTime(this.gestureStartPosition), 'to', this.formatTime(this.seekPosition));
             } catch (error) {
                 console.error('Seek error:', error);
             }

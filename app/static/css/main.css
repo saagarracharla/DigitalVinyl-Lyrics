@@ -135,6 +135,11 @@ body {
     z-index: 1000;
 }
 
+/* Completely hide karaoke content when vinyl mode is visible */
+.vinyl-mode:not([style*="display: none"]) ~ * {
+    display: none !important;
+}
+
 .vinyl-container {
     width: min(100vw, 100vh);
     height: min(100vw, 100vh);
@@ -378,5 +383,13 @@ body {
 
 /* Hide karaoke mode when vinyl is active */
 body.vinyl-active .karaoke-container {
-    display: none;
+    display: none !important;
+}
+
+body.vinyl-active .header,
+body.vinyl-active .status,
+body.vinyl-active .progress-container,
+body.vinyl-active .controls,
+body.vinyl-active .lyrics-container {
+    display: none !important;
 }
