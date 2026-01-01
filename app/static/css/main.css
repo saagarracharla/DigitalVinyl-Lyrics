@@ -204,6 +204,10 @@ body {
     animation: none; /* Disable default animation during seeking */
 }
 
+.album-art.paused {
+    animation-play-state: paused; /* Pause the spinning animation */
+}
+
 .album-overlay {
     position: absolute;
     top: 0;

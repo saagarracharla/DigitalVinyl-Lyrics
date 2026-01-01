@@ -116,6 +116,8 @@ class VinylKaraokeApp {
                 // Hide pause timestamp when resuming
                 if (this.isVinylMode && this.pauseTimestamp) {
                     this.pauseTimestamp.classList.remove('visible');
+                    // Resume album art spinning
+                    this.albumArt.classList.remove('paused');
                 }
                 
                 // If in vinyl mode with lyrics loaded, go back to lyrics immediately
@@ -162,6 +164,10 @@ class VinylKaraokeApp {
             this.trackInfo.classList.add('visible');
             this.albumArt.classList.remove('blurred');
             this.albumOverlay.classList.remove('visible');
+            
+            // Pause the album art spinning
+            this.albumArt.classList.add('paused');
+            
             this.vinylState = 'track-info';
             
             // Show pause timestamp if we have a current position
