@@ -265,24 +265,36 @@ class SpotifyPlayer {
         
         // Update progress
         // If we just seeked, check if the position matches our seek (within 2 seconds)
-        // If so, clear the justSeeked flag early to resume updates
+        // If so, clear justSeeked flag early and update progress immediately
         if (this.justSeeked && Math.abs(position - this.seekPosition) < 2000) {
             console.log('Seek confirmed, resuming updates');
             this.justSeeked = false;
             this.actualCurrentPosition = position;
             this.lastUpdateTime = Date.now();
+            // Update progress bar immediately with confirmed position
+            const progress = Math.min(1, Math.max(0, position / duration));
+            this.updateProgressBars(progress);
+            // Restart smooth progress if playing
+            if (!paused && !this.smoothProgressInterval) {
+                this.startSmoothProgress(duration);
+            }
         }
         
         if (!this.isDragging && !this.justSeeked) {
-            this.actualCurrentPosition = position;
-            this.lastUpdateTime = Date.now();
-            const progress = position / duration;
-            this.updateProgressBars(progress);
-            
-            if (!paused && !this.smoothProgressInterval) {
-                this.startSmoothProgress(duration);
-            } else if (paused) {
-                this.stopSmoothProgress();
+            // Ensure we're updating for the current track
+            if (this.currentTrack && 
+                this.currentTrack.track_name === track.name &&
+                this.currentTrack.duration_ms === duration) {
+                this.actualCurrentPosition = position;
+                this.lastUpdateTime = Date.now();
+                const progress = Math.min(1, Math.max(0, position / duration));
+                this.updateProgressBars(progress);
+                
+                if (!paused && !this.smoothProgressInterval) {
+                    this.startSmoothProgress(duration);
+                } else if (paused) {
+                    this.stopSmoothProgress();
+                }
             }
             
             // Also update lyrics immediately when position changes (backup to interval)
@@ -433,10 +445,31 @@ class SpotifyPlayer {
     }
     
     async handleNewTrack(trackData) {
+        // Immediately clear everything first
+        this.clearLyrics();
+        this.clearVinylLyrics(); // Clear vinyl mode lyrics immediately
+        
+        // Stop any existing progress intervals
+        this.stopSmoothProgress();
+        
+        // Reset progress tracking for new track
+        // Use the provided position if available, otherwise start at 0
+        const initialPosition = trackData.progress_ms || 0;
+        this.actualCurrentPosition = initialPosition;
+        this.lastUpdateTime = Date.now();
+        
+        // Reset progress bars to initial position
+        if (trackData.duration_ms && trackData.duration_ms > 0) {
+            const initialProgress = initialPosition / trackData.duration_ms;
+            this.updateProgressBars(initialProgress);
+        } else {
+            this.updateProgressBars(0);
+        }
+        
+        // Update current track
         this.currentTrack = trackData;
         this.currentLyricIndex = -1;
         this.lyrics = [];
-        this.clearLyrics();
         
         if (!this.isVinylMode) {
             this.statusEl.textContent = `🎵 ${trackData.artist} - ${trackData.track_name}`;
@@ -447,7 +480,8 @@ class SpotifyPlayer {
             this.showVinylTrackInfo(trackData);
         }
         
-        await this.fetchLyrics(trackData);
+        // Fetch lyrics and display immediately when received
+        this.fetchLyrics(trackData);
     }
     
     async fetchLyrics(trackData) {
@@ -458,19 +492,35 @@ class SpotifyPlayer {
             
             console.log('Lyrics response:', data);
             
+            // Check if track hasn't changed while fetching (race condition protection)
+            if (this.currentTrack && 
+                this.currentTrack.track_name === trackData.track_name && 
+                this.currentTrack.artist === trackData.artist) {
+            
             if (data.lines && data.lines.length > 0) {
                 this.lyrics = data.lines;
-                console.log(`Loaded ${this.lyrics.length} lyric lines`);
+                    console.log(`Loaded ${this.lyrics.length} lyric lines`);
+                    
+                    // Immediately render lyrics as soon as they arrive
                 this.renderLyrics();
                 
-                if (this.isVinylMode && this.vinylState === 'track-info') {
+                    // If in vinyl mode and showing lyrics, update immediately
+                    if (this.isVinylMode && this.vinylState === 'lyrics') {
+                        this.updateVinylLyrics();
+                    }
+                    
+                    // If in vinyl mode showing track info, transition to lyrics after delay
+                    if (this.isVinylMode && this.vinylState === 'track-info') {
                     setTimeout(() => this.transitionToVinylLyrics(), 5000);
                 }
             } else {
-                console.log('No lyrics found for this track');
-                if (!this.isVinylMode && this.statusEl) {
-                    this.statusEl.textContent = `🎵 ${trackData.artist} - ${trackData.track_name} (No lyrics available)`;
+                    console.log('No lyrics found for this track');
+                    if (!this.isVinylMode && this.statusEl) {
+                        this.statusEl.textContent = `🎵 ${trackData.artist} - ${trackData.track_name} (No lyrics available)`;
+                    }
                 }
+            } else {
+                console.log('Track changed while fetching lyrics, ignoring response');
             }
         } catch (error) {
             console.error('Lyrics error:', error);
@@ -494,15 +544,24 @@ class SpotifyPlayer {
     startSmoothProgress(duration) {
         if (this.isDragging || this.justSeeked || this.smoothProgressInterval) return;
         
+        // Ensure we have a valid duration
+        if (!duration || duration <= 0) return;
+        
         this.smoothProgressInterval = setInterval(() => {
             if (this.isDragging || this.justSeeked || !this.currentTrack) {
                 this.stopSmoothProgress();
                 return;
             }
             
+            // Verify we're still on the same track
+            if (this.currentTrack.duration_ms !== duration) {
+                this.stopSmoothProgress();
+                return;
+            }
+            
             const timeSinceUpdate = Date.now() - this.lastUpdateTime;
             const interpolatedPosition = this.actualCurrentPosition + timeSinceUpdate;
-            const interpolatedProgress = Math.min(1, interpolatedPosition / duration);
+            const interpolatedProgress = Math.min(1, Math.max(0, interpolatedPosition / duration));
             this.updateProgressBars(interpolatedProgress);
         }, 50);
     }
@@ -556,6 +615,22 @@ class SpotifyPlayer {
         this.lyricsContainer.innerHTML = '';
         this.lyrics = [];
         this.currentLyricIndex = -1;
+    }
+    
+    clearVinylLyrics() {
+        // Immediately clear vinyl mode lyric displays
+        if (this.previousLyric) {
+            this.previousLyric.textContent = '';
+            this.previousLyric.classList.remove('visible');
+        }
+        if (this.currentLyric) {
+            this.currentLyric.textContent = '';
+            this.currentLyric.style.opacity = '1';
+        }
+        if (this.nextLyric) {
+            this.nextLyric.textContent = '';
+            this.nextLyric.classList.remove('visible');
+        }
     }
     
     // VINYL MODE
@@ -1316,13 +1391,18 @@ class SpotifyPlayer {
             this.albumOverlay.classList.add('visible');
         }
         
-        if (Math.abs(this.seekPosition - this.gestureStartPosition) > 500) {
+        if (Math.abs(this.seekPosition - this.gestureStartPosition) > 500 && this.currentTrack) {
             try {
-                const seekProgress = this.seekPosition / this.currentTrack.duration_ms;
+                // Immediately update progress bar to show the seek position
+                const seekProgress = Math.min(1, Math.max(0, this.seekPosition / this.currentTrack.duration_ms));
                 this.updateProgressBars(seekProgress);
                 this.actualCurrentPosition = this.seekPosition;
                 this.lastUpdateTime = Date.now();
                 
+                // Stop smooth progress before seeking
+                this.stopSmoothProgress();
+                
+                // Perform the seek
                 if (this.player && this.isSDKReady) {
                     await this.player.seek(this.seekPosition);
                 } else {
@@ -1333,26 +1413,49 @@ class SpotifyPlayer {
                 });
                 }
                 
+                // Set flag to prevent immediate updates from overwriting our seek
                 this.justSeeked = true;
-                this.stopSmoothProgress();
                 
-                // Set a shorter timeout, and also wait for SDK to confirm the seek
-                // The SDK state update will clear justSeeked early if position matches
+                // Set timeout as fallback - SDK state update should clear justSeeked earlier
                 setTimeout(() => {
                     if (this.justSeeked) {
                         console.log('Seek timeout - forcing resume');
                     this.actualCurrentPosition = this.seekPosition;
                     this.lastUpdateTime = Date.now();
                     this.justSeeked = false;
+                        
+                        // Update progress bar one more time
+                        if (this.currentTrack) {
+                            const progress = Math.min(1, Math.max(0, this.seekPosition / this.currentTrack.duration_ms));
+                            this.updateProgressBars(progress);
+                        }
+                        
                         // Restart smooth progress if playing
-                        if (this.currentTrack && !this.isDragging) {
-                            this.startSmoothProgress(this.currentTrack.duration_ms);
+                        if (this.currentTrack && !this.isDragging && this.player) {
+                            this.player.getCurrentState().then(state => {
+                                if (state && !state.paused) {
+                                    this.startSmoothProgress(this.currentTrack.duration_ms);
+                                }
+                            }).catch(() => {
+                                // Fallback: restart anyway if we can't check state
+                                this.startSmoothProgress(this.currentTrack.duration_ms);
+                            });
                         }
                     }
-                }, 2000); // Reduced from 4000 to 2000ms
+                }, 2000);
             } catch (error) {
                 console.error('Seek error:', error);
+                // On error, clear justSeeked and restart progress
+                this.justSeeked = false;
+                if (this.currentTrack) {
+                    const progress = Math.min(1, Math.max(0, this.seekPosition / this.currentTrack.duration_ms));
+                    this.updateProgressBars(progress);
+                    this.startSmoothProgress(this.currentTrack.duration_ms);
+                }
             }
+        } else {
+            // No significant seek - just reset
+            this.justSeeked = false;
         }
     }
     
