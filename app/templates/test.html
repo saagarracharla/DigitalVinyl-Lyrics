@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>API Testing - Spotify Player</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #121212;
+            color: #fff;
+            padding: 20px;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            margin-bottom: 30px;
+            color: #1db954;
+        }
+
+        .test-section {
+            background: #1e1e1e;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            border: 1px solid #333;
+        }
+
+        .test-section h2 {
+            margin-bottom: 15px;
+            color: #1db954;
+            font-size: 1.2rem;
+        }
+
+        .test-controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+            flex-wrap: wrap;
+        }
+
+        input, select {
+            padding: 8px 12px;
+            border: 1px solid #333;
+            border-radius: 4px;
+            background: #2a2a2a;
+            color: #fff;
+            font-size: 14px;
+        }
+
+        input[type="text"] {
+            flex: 1;
+            min-width: 200px;
+        }
+
+        button {
+            padding: 8px 16px;
+            background: #1db954;
+            color: #fff;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: 500;
+            transition: background 0.2s;
+        }
+
+        button:hover {
+            background: #1ed760;
+        }
+
+        button:disabled {
+            background: #555;
+            cursor: not-allowed;
+        }
+
+        .result {
+            background: #0a0a0a;
+            border: 1px solid #333;
+            border-radius: 4px;
+            padding: 15px;
+            margin-top: 15px;
+            max-height: 400px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
+        .result.success {
+            border-color: #1db954;
+        }
+
+        .result.error {
+            border-color: #e22134;
+            color: #ff6b6b;
+        }
+
+        .result.loading {
+            color: #1db954;
+        }
+
+        .endpoint-info {
+            font-size: 11px;
+            color: #888;
+            margin-bottom: 10px;
+        }
+
+        .playback-controls {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+        }
+
+        .playback-controls button {
+            flex: 1;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🧪 Spotify API Testing</h1>
+        <p style="color: #888; margin-bottom: 30px;">
+            Test all the new browsing endpoints. Make sure your Spotify is authenticated!
+        </p>
+
+        <!-- Current Track -->
+        <div class="test-section">
+            <h2>Current Track</h2>
+            <div class="endpoint-info">GET /current-track</div>
+            <button onclick="testCurrentTrack()">Get Current Track</button>
+            <div id="currentTrackResult" class="result" style="display: none;"></div>
+        </div>
+
+        <!-- Playlists -->
+        <div class="test-section">
+            <h2>Get Playlists</h2>
+            <div class="endpoint-info">GET /api/playlists?limit=50&offset=0</div>
+            <div class="test-controls">
+                <input type="number" id="playlistsLimit" value="50" placeholder="Limit">
+                <input type="number" id="playlistsOffset" value="0" placeholder="Offset">
+                <button onclick="testPlaylists()">Get Playlists</button>
+            </div>
+            <div id="playlistsResult" class="result" style="display: none;"></div>
+        </div>
+
+        <!-- Playlist Tracks -->
+        <div class="test-section">
+            <h2>Get Playlist Tracks</h2>
+            <div class="endpoint-info">GET /api/playlist/&lt;id&gt;/tracks</div>
+            <div class="test-controls">
+                <input type="text" id="playlistId" placeholder="Playlist ID">
+                <input type="number" id="playlistTracksLimit" value="50" placeholder="Limit">
+                <input type="number" id="playlistTracksOffset" value="0" placeholder="Offset">
+                <button onclick="testPlaylistTracks()">Get Tracks</button>
+            </div>
+            <div id="playlistTracksResult" class="result" style="display: none;"></div>
+        </div>
+
+        <!-- Search -->
+        <div class="test-section">
+            <h2>Search</h2>
+            <div class="endpoint-info">GET /api/search?q=&lt;query&gt;&type=&lt;type&gt;&limit=&lt;limit&gt;</div>
+            <div class="test-controls">
+                <input type="text" id="searchQuery" placeholder="Search query" value="beatles">
+                <select id="searchType">
+                    <option value="track">Track</option>
+                    <option value="album">Album</option>
+                    <option value="artist">Artist</option>
+                    <option value="playlist">Playlist</option>
+                </select>
+                <input type="number" id="searchLimit" value="20" placeholder="Limit">
+                <button onclick="testSearch()">Search</button>
+            </div>
+            <div id="searchResult" class="result" style="display: none;"></div>
+        </div>
+
+        <!-- Saved Albums -->
+        <div class="test-section">
+            <h2>Get Saved Albums</h2>
+            <div class="endpoint-info">GET /api/albums?limit=50&offset=0</div>
+            <div class="test-controls">
+                <input type="number" id="albumsLimit" value="50" placeholder="Limit">
+                <input type="number" id="albumsOffset" value="0" placeholder="Offset">
+                <button onclick="testAlbums()">Get Albums</button>
+            </div>
+            <div id="albumsResult" class="result" style="display: none;"></div>
+        </div>
+
+        <!-- Album Tracks -->
+        <div class="test-section">
+            <h2>Get Album Tracks</h2>
+            <div class="endpoint-info">GET /api/album/&lt;id&gt;</div>
+            <div class="test-controls">
+                <input type="text" id="albumId" placeholder="Album ID">
+                <button onclick="testAlbumTracks()">Get Album</button>
+            </div>
+            <div id="albumTracksResult" class="result" style="display: none;"></div>
+        </div>
+
+        <!-- Recently Played -->
+        <div class="test-section">
+            <h2>Recently Played</h2>
+            <div class="endpoint-info">GET /api/recently-played?limit=50</div>
+            <div class="test-controls">
+                <input type="number" id="recentLimit" value="50" placeholder="Limit">
+                <button onclick="testRecentlyPlayed()">Get Recently Played</button>
+            </div>
+            <div id="recentResult" class="result" style="display: none;"></div>
+        </div>
+
+        <!-- Play Item -->
+        <div class="test-section">
+            <h2>Play Item</h2>
+            <div class="endpoint-info">POST /api/play</div>
+            <div class="test-controls">
+                <select id="playType">
+                    <option value="track">Track</option>
+                    <option value="album">Album</option>
+                    <option value="playlist">Playlist</option>
+                </select>
+                <input type="text" id="playId" placeholder="ID to play">
+                <button onclick="testPlay()">Play</button>
+            </div>
+            <div id="playResult" class="result" style="display: none;"></div>
+        </div>
+
+        <!-- Playback Controls -->
+        <div class="test-section">
+            <h2>Playback Controls</h2>
+            <div class="playback-controls">
+                <button onclick="playPause()">Play/Pause</button>
+                <button onclick="nextTrack()">Next</button>
+                <button onclick="previousTrack()">Previous</button>
+            </div>
+            <div id="playbackResult" class="result" style="display: none;"></div>
+        </div>
+    </div>
+
+    <script>
+        function showResult(elementId, data, isError = false) {
+            const element = document.getElementById(elementId);
+            element.style.display = 'block';
+            element.className = `result ${isError ? 'error' : 'success'}`;
+            element.textContent = JSON.stringify(data, null, 2);
+        }
+
+        function showLoading(elementId) {
+            const element = document.getElementById(elementId);
+            element.style.display = 'block';
+            element.className = 'result loading';
+            element.textContent = 'Loading...';
+        }
+
+        async function testCurrentTrack() {
+            showLoading('currentTrackResult');
+            try {
+                const response = await fetch('/current-track');
+                const data = await response.json();
+                showResult('currentTrackResult', data, !response.ok);
+            } catch (error) {
+                showResult('currentTrackResult', { error: error.message }, true);
+            }
+        }
+
+        async function testPlaylists() {
+            showLoading('playlistsResult');
+            const limit = document.getElementById('playlistsLimit').value;
+            const offset = document.getElementById('playlistsOffset').value;
+            try {
+                const response = await fetch(`/api/playlists?limit=${limit}&offset=${offset}`);
+                const data = await response.json();
+                showResult('playlistsResult', data, !response.ok);
+            } catch (error) {
+                showResult('playlistsResult', { error: error.message }, true);
+            }
+        }
+
+        async function testPlaylistTracks() {
+            showLoading('playlistTracksResult');
+            const playlistId = document.getElementById('playlistId').value;
+            const limit = document.getElementById('playlistTracksLimit').value;
+            const offset = document.getElementById('playlistTracksOffset').value;
+            
+            if (!playlistId) {
+                showResult('playlistTracksResult', { error: 'Please enter a playlist ID' }, true);
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/playlist/${playlistId}/tracks?limit=${limit}&offset=${offset}`);
+                const data = await response.json();
+                showResult('playlistTracksResult', data, !response.ok);
+            } catch (error) {
+                showResult('playlistTracksResult', { error: error.message }, true);
+            }
+        }
+
+        async function testSearch() {
+            showLoading('searchResult');
+            const query = document.getElementById('searchQuery').value;
+            const type = document.getElementById('searchType').value;
+            const limit = document.getElementById('searchLimit').value;
+            
+            if (!query) {
+                showResult('searchResult', { error: 'Please enter a search query' }, true);
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/search?q=${encodeURIComponent(query)}&type=${type}&limit=${limit}`);
+                const data = await response.json();
+                showResult('searchResult', data, !response.ok);
+            } catch (error) {
+                showResult('searchResult', { error: error.message }, true);
+            }
+        }
+
+        async function testAlbums() {
+            showLoading('albumsResult');
+            const limit = document.getElementById('albumsLimit').value;
+            const offset = document.getElementById('albumsOffset').value;
+            try {
+                const response = await fetch(`/api/albums?limit=${limit}&offset=${offset}`);
+                const data = await response.json();
+                showResult('albumsResult', data, !response.ok);
+            } catch (error) {
+                showResult('albumsResult', { error: error.message }, true);
+            }
+        }
+
+        async function testAlbumTracks() {
+            showLoading('albumTracksResult');
+            const albumId = document.getElementById('albumId').value;
+            
+            if (!albumId) {
+                showResult('albumTracksResult', { error: 'Please enter an album ID' }, true);
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/album/${albumId}`);
+                const data = await response.json();
+                showResult('albumTracksResult', data, !response.ok);
+            } catch (error) {
+                showResult('albumTracksResult', { error: error.message }, true);
+            }
+        }
+
+        async function testRecentlyPlayed() {
+            showLoading('recentResult');
+            const limit = document.getElementById('recentLimit').value;
+            try {
+                const response = await fetch(`/api/recently-played?limit=${limit}`);
+                const data = await response.json();
+                showResult('recentResult', data, !response.ok);
+            } catch (error) {
+                showResult('recentResult', { error: error.message }, true);
+            }
+        }
+
+        async function testPlay() {
+            showLoading('playResult');
+            const type = document.getElementById('playType').value;
+            const id = document.getElementById('playId').value;
+            
+            if (!id) {
+                showResult('playResult', { error: 'Please enter an ID' }, true);
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/play', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ type, id })
+                });
+                const data = await response.json();
+                showResult('playResult', data, !response.ok);
+            } catch (error) {
+                showResult('playResult', { error: error.message }, true);
+            }
+        }
+
+        async function playPause() {
+            showLoading('playbackResult');
+            try {
+                const response = await fetch('/play-pause', { method: 'POST' });
+                const data = await response.json();
+                showResult('playbackResult', data, !response.ok);
+            } catch (error) {
+                showResult('playbackResult', { error: error.message }, true);
+            }
+        }
+
+        async function nextTrack() {
+            showLoading('playbackResult');
+            try {
+                const response = await fetch('/next-track', { method: 'POST' });
+                const data = await response.json();
+                showResult('playbackResult', data, !response.ok);
+            } catch (error) {
+                showResult('playbackResult', { error: error.message }, true);
+            }
+        }
+
+        async function previousTrack() {
+            showLoading('playbackResult');
+            try {
+                const response = await fetch('/previous-track', { method: 'POST' });
+                const data = await response.json();
+                showResult('playbackResult', data, !response.ok);
+            } catch (error) {
+                showResult('playbackResult', { error: error.message }, true);
+            }
+        }
+    </script>
+</body>
+</html>
+
