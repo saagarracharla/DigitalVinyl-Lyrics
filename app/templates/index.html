@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🎤 Vinyl Karaoke Player</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+</head>
+<body>
+    <!-- Normal Karaoke Mode -->
+    <div class="karaoke-container">
+        <div class="header">
+            <h1>🎤 Vinyl Karaoke</h1>
+            <div class="status" id="status">🎵 Play a song in Spotify to start</div>
+        </div>
+        
+        <div class="progress-container" id="progressContainer" style="display: none;">
+            <div class="progress-bar">
+                <div class="progress-fill" id="progressFill"></div>
+            </div>
+        </div>
+        
+        <div class="controls">
+            <button class="btn" id="vinylBtn">Vinyl Mode</button>
+            <button class="btn" id="refreshBtn">Refresh</button>
+        </div>
+        
+        <div class="lyrics-container" id="lyricsContainer"></div>
+    </div>
+    
+    <!-- Vinyl Mode - 1080x1080 Circular Display -->
+    <div class="vinyl-mode" id="vinylMode" style="display: none;">
+        <div class="vinyl-container">
+            <div class="vinyl-circle">
+                <!-- Circular Progress Ring -->
+                <svg class="progress-ring" viewBox="0 0 1080 1080">
+                    <circle class="progress-ring-bg" cx="540" cy="540" r="535" />
+                    <circle class="progress-ring-fill" cx="540" cy="540" r="535" id="progressRing" />
+                </svg>
+                
+                <!-- Album Art Background -->
+                <div class="album-art" id="albumArt"></div>
+                <div class="album-overlay" id="albumOverlay"></div>
+                
+                <!-- Content Area -->
+                <div class="vinyl-content">
+                    <!-- Seek Timestamp -->
+                    <div class="seek-timestamp" id="seekTimestamp"></div>
+                    
+                    <!-- Pause Timestamp -->
+                    <div class="pause-timestamp" id="pauseTimestamp"></div>
+                    
+                    <!-- Track Info State -->
+                    <div class="track-info" id="trackInfo">
+                        <div class="artist" id="vinylArtist"></div>
+                        <div class="title" id="vinylTitle"></div>
+                    </div>
+                    
+                    <!-- Lyrics State -->
+                    <div class="lyric-display" id="lyricDisplay">
+                        <div class="previous-lyric" id="previousLyric"></div>
+                        <div class="current-lyric" id="currentLyric"></div>
+                        <div class="next-lyric" id="nextLyric"></div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Playback Controls -->
+            <div class="vinyl-controls">
+                <button class="control-btn" id="prevBtn">⏮</button>
+                <button class="control-btn" id="playPauseBtn">⏸</button>
+                <button class="control-btn" id="nextBtn">⏭</button>
+            </div>
+        </div>
+    </div>
+    
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
