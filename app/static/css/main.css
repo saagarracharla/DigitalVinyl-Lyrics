@@ -1,0 +1,421 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Playfair+Display:wght@400;500;600;700;800;900&display=swap');
+
+/* Global Styles */
+* { 
+    margin: 0; 
+    padding: 0; 
+    box-sizing: border-box; 
+}
+
+body { 
+    font-family: 'Inter', sans-serif;
+    background: linear-gradient(135deg, #0f0f0f 0%, #1a1a1a 25%, #2d2d2d 75%, #000000 100%);
+    color: white;
+    min-height: 100vh;
+    overflow: hidden; /* For kiosk mode */
+}
+
+/* Normal Karaoke Mode */
+.karaoke-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 20px;
+    min-height: 100vh;
+}
+
+.header {
+    text-align: center;
+    margin-bottom: 30px;
+}
+
+.header h1 {
+    font-size: 2.5rem;
+    font-weight: 800;
+    background: linear-gradient(135deg, #ffffff 0%, #e0e0e0 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin-bottom: 10px;
+}
+
+.status {
+    padding: 15px 25px;
+    border-radius: 25px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    backdrop-filter: blur(10px);
+}
+
+.progress-container {
+    width: 100%;
+    max-width: 600px;
+    margin-bottom: 30px;
+}
+
+.progress-bar {
+    width: 100%;
+    height: 6px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #1db954 0%, #1ed760 100%);
+    border-radius: 3px;
+    transition: width 0.5s ease;
+}
+
+.controls {
+    display: flex;
+    gap: 15px;
+    margin-bottom: 30px;
+}
+
+.btn {
+    padding: 12px 24px;
+    border: none;
+    border-radius: 25px;
+    background: rgba(255, 255, 255, 0.1);
+    color: white;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    font-weight: 500;
+}
+
+.btn:hover {
+    background: rgba(255, 255, 255, 0.2);
+    transform: translateY(-2px);
+}
+
+.btn.active {
+    background: #1db954;
+}
+
+.lyrics-container {
+    width: 100%;
+    max-width: 800px;
+    min-height: 400px;
+}
+
+.lyric-line {
+    font-family: 'Playfair Display', serif;
+    font-size: 1.6rem;
+    line-height: 1.4;
+    padding: 20px 30px;
+    margin: 8px 0;
+    border-radius: 12px;
+    letter-spacing: 0.3px;
+    text-align: center;
+    transition: all 1.2s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+    opacity: 0.25;
+}
+
+.lyric-line.active {
+    opacity: 1;
+    transform: translateY(-2px) scale(1.02);
+    font-size: 1.8rem;
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.03) 0%, rgba(255, 255, 255, 0.01) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+}
+
+/* VINYL MODE - Production Ready */
+.vinyl-mode {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: #000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+
+/* Completely hide karaoke content when vinyl mode is visible */
+.vinyl-mode:not([style*="display: none"]) ~ * {
+    display: none !important;
+}
+
+.vinyl-container {
+    width: min(100vw, 100vh);
+    height: min(100vw, 100vh);
+    position: relative;
+}
+
+.vinyl-circle {
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    position: relative;
+    overflow: hidden;
+    background: #1a1a1a;
+}
+
+/* Circular Progress Ring */
+.progress-ring {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 5;
+    transform: rotate(-90deg); /* Start from top */
+}
+
+.progress-ring-bg {
+    fill: none;
+    stroke: rgba(255, 255, 255, 0.1);
+    stroke-width: 8;
+}
+
+.progress-ring-fill {
+    fill: none;
+    stroke: #1db954;
+    stroke-width: 8;
+    stroke-linecap: round;
+    stroke-dasharray: 3361; /* 2 * π * 535 */
+    stroke-dashoffset: 3361;
+    transition: stroke-dashoffset 0.5s ease;
+}
+
+/* Album Art Background */
+.album-art {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-size: cover;
+    background-position: center;
+    transition: filter 2s ease;
+    animation: vinylSpin 20s linear infinite;
+}
+
+.album-art.blurred {
+    filter: blur(15px) brightness(0.4);
+}
+
+.album-art.seeking {
+    filter: blur(0px) brightness(1);
+    animation: none; /* Disable default animation during seeking */
+}
+
+.album-art.paused {
+    animation-play-state: paused; /* Pause the spinning animation */
+}
+
+.album-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: radial-gradient(circle at center, transparent 30%, rgba(0,0,0,0.8) 100%);
+    opacity: 0;
+    transition: opacity 2s ease;
+}
+
+.album-overlay.visible {
+    opacity: 1;
+}
+
+/* Playback Controls */
+.vinyl-controls {
+    position: absolute;
+    bottom: 40px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 20px;
+    z-index: 10;
+}
+
+.control-btn {
+    width: 60px;
+    height: 60px;
+    border: none;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.1);
+    color: white;
+    font-size: 1.5rem;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.control-btn:hover {
+    background: rgba(255, 255, 255, 0.2);
+    transform: scale(1.1);
+}
+
+.control-btn:active {
+    transform: scale(0.95);
+}
+
+/* Content Area */
+.vinyl-content {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 85%;
+    height: 85%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+}
+
+/* Seek Timestamp */
+.seek-timestamp {
+    position: absolute;
+    top: 20%;
+    left: 50%;
+    transform: translateX(-50%);
+    font-family: 'Inter', sans-serif;
+    font-size: 2rem;
+    font-weight: 600;
+    color: #1db954;
+    background: rgba(0, 0, 0, 0.8);
+    padding: 10px 20px;
+    border-radius: 20px;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+    z-index: 10;
+}
+
+.seek-timestamp.visible {
+    opacity: 1;
+}
+
+/* Pause Timestamp */
+.pause-timestamp {
+    position: absolute;
+    top: 30%;
+    left: 50%;
+    transform: translateX(-50%);
+    font-family: 'Inter', sans-serif;
+    font-size: 1.8rem;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.9);
+    background: rgba(0, 0, 0, 0.7);
+    padding: 8px 16px;
+    border-radius: 15px;
+    opacity: 0;
+    transition: opacity 0.5s ease;
+    z-index: 9;
+}
+
+.pause-timestamp.visible {
+    opacity: 1;
+}
+
+/* Track Info State */
+.track-info {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 100%;
+    opacity: 0;
+    transition: opacity 1.5s ease;
+}
+
+.track-info.visible {
+    opacity: 1;
+}
+
+.artist {
+    font-family: 'Playfair Display', serif;
+    font-size: 3.2rem;
+    font-weight: 400;
+    color: rgba(255, 255, 255, 0.95);
+    margin-bottom: 20px;
+    line-height: 1.2;
+    text-shadow: 0 4px 20px rgba(0, 0, 0, 0.8);
+}
+
+.title {
+    font-family: 'Playfair Display', serif;
+    font-size: 2.6rem;
+    font-weight: 300;
+    color: rgba(255, 255, 255, 0.8);
+    line-height: 1.3;
+    text-shadow: 0 4px 20px rgba(0, 0, 0, 0.8);
+}
+
+/* Lyrics State */
+.lyric-display {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    transition: opacity 2s ease;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 30px;
+}
+
+.lyric-display.visible {
+    opacity: 1;
+}
+
+.previous-lyric, .next-lyric {
+    font-family: 'Playfair Display', serif;
+    font-size: 2.2rem;
+    line-height: 1.3;
+    color: rgba(255, 255, 255, 0.4);
+    text-shadow: 0 4px 20px rgba(0, 0, 0, 0.8);
+    text-align: center;
+    opacity: 0;
+    transition: opacity 1s ease;
+}
+
+.previous-lyric.visible, .next-lyric.visible {
+    opacity: 1;
+}
+
+.current-lyric {
+    font-family: 'Playfair Display', serif;
+    font-size: 3.5rem;
+    line-height: 1.3;
+    color: rgba(255, 255, 255, 0.95);
+    text-shadow: 0 4px 20px rgba(0, 0, 0, 0.8);
+    animation: lyricBreathe 4s ease-in-out infinite;
+    text-align: center;
+    font-weight: 500;
+}
+
+/* Animations */
+@keyframes vinylSpin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+@keyframes lyricBreathe {
+    0%, 100% { opacity: 0.95; }
+    50% { opacity: 1; }
+}
+
+/* Hide karaoke mode when vinyl is active */
+body.vinyl-active .karaoke-container {
+    display: none !important;
+}
+
+body.vinyl-active .header,
+body.vinyl-active .status,
+body.vinyl-active .progress-container,
+body.vinyl-active .controls,
+body.vinyl-active .lyrics-container {
+    display: none !important;
+}

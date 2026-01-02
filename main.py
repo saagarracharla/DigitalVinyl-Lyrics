@@ -1,0 +1,55 @@
+from flask import Flask, render_template, jsonify, request
+import os
+from app.services.spotify_service import SpotifyService
+from app.services.lyrics_service import LyricsService
+
+def create_app():
+    # Configure Flask to find templates and static files in app/ directory
+    app = Flask(__name__, 
+                template_folder='app/templates',
+                static_folder='app/static')
+    
+    # Initialize services
+    spotify_service = SpotifyService()
+    lyrics_service = LyricsService()
+    
+    @app.route('/')
+    def index():
+        return render_template('index.html')
+    
+    @app.route('/current-track')
+    def current_track():
+        return spotify_service.get_current_track()
+    
+    @app.route('/lyrics')
+    def get_lyrics():
+        track = request.args.get('track')
+        artist = request.args.get('artist')
+        
+        if not track or not artist:
+            return jsonify({'lines': []})
+        
+        return lyrics_service.get_lyrics(track, artist)
+    
+    @app.route('/play-pause', methods=['POST'])
+    def play_pause():
+        return spotify_service.play_pause()
+    
+    @app.route('/next-track', methods=['POST'])
+    def next_track():
+        return spotify_service.next_track()
+    
+    @app.route('/previous-track', methods=['POST'])
+    def previous_track():
+        return spotify_service.previous_track()
+    
+    @app.route('/seek', methods=['POST'])
+    def seek():
+        position_ms = request.json.get('position_ms', 0)
+        return spotify_service.seek_to_position(position_ms)
+    
+    return app
+
+if __name__ == '__main__':
+    app = create_app()
+    app.run(debug=True, host='0.0.0.0', port=5004)  # 0.0.0.0 for Pi deployment

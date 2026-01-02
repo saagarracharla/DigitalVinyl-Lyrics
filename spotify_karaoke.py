@@ -32,54 +32,502 @@ def index():
 <head>
     <title>🎤 Spotify Karaoke</title>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Playfair+Display:wght@400;500;600;700;800;900&display=swap');
         
         * { margin: 0; padding: 0; box-sizing: border-box; }
         
         body { 
             font-family: 'Inter', sans-serif;
-            background: linear-gradient(135deg, #1ed760 0%, #1db954 25%, #191414 75%, #000000 100%);
+            background: linear-gradient(135deg, #0f0f0f 0%, #1a1a1a 25%, #2d2d2d 75%, #000000 100%);
             color: white;
             min-height: 100vh;
             display: flex;
             flex-direction: column;
             align-items: center;
             padding: 20px;
+            overflow-x: hidden;
         }
         
-        .container { max-width: 900px; width: 100%; display: flex; flex-direction: column; align-items: center; gap: 30px; }
+        .container { 
+            max-width: 1200px; 
+            width: 100%; 
+            display: flex; 
+            flex-direction: column; 
+            align-items: center; 
+            gap: 40px; 
+        }
         
-        .header { text-align: center; margin-top: 40px; }
-        .header h1 { font-size: 3.5rem; font-weight: 700; background: linear-gradient(45deg, #1ed760, #ffffff); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 10px; }
+        .header { 
+            text-align: center; 
+            margin-top: 40px; 
+            position: relative;
+        }
+        
+        .header h1 { 
+            font-family: 'Playfair Display', serif;
+            font-size: 4rem; 
+            font-weight: 800; 
+            background: linear-gradient(45deg, #ff6b6b, #4ecdc4, #45b7d1, #96ceb4, #feca57);
+            background-size: 300% 300%;
+            -webkit-background-clip: text; 
+            -webkit-text-fill-color: transparent; 
+            margin-bottom: 10px;
+            animation: gradientShift 8s ease-in-out infinite;
+            text-shadow: 0 0 30px rgba(255, 255, 255, 0.1);
+        }
+        
+        @keyframes gradientShift {
+            0%, 100% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+        }
         
         .track-info { 
-            background: rgba(0,0,0,0.7); backdrop-filter: blur(20px); padding: 30px 40px; border-radius: 20px; 
-            border: 1px solid rgba(255,255,255,0.1); text-align: center; width: 100%; box-shadow: 0 20px 40px rgba(0,0,0,0.3);
+            background: rgba(0,0,0,0.8); 
+            backdrop-filter: blur(30px); 
+            padding: 30px 50px; 
+            border-radius: 25px; 
+            border: 1px solid rgba(255,255,255,0.1); 
+            text-align: center; 
+            width: 100%; 
+            box-shadow: 0 25px 50px rgba(0,0,0,0.5);
+            position: relative;
+            overflow: hidden;
         }
         
-        .track-name { font-size: 2rem; font-weight: 600; margin-bottom: 8px; }
-        .artist-name { font-size: 1.2rem; color: #b3b3b3; font-weight: 300; margin-bottom: 20px; }
+        .track-info::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.1), transparent);
+            animation: shimmer 3s infinite;
+        }
         
-        .progress-bar { width: 100%; height: 6px; background: rgba(255,255,255,0.2); border-radius: 3px; margin: 20px 0; }
-        .progress { height: 100%; background: linear-gradient(90deg, #1ed760, #1db954); width: 0%; transition: width 0.1s ease; border-radius: 3px; }
+        @keyframes shimmer {
+            0% { left: -100%; }
+            100% { left: 100%; }
+        }
+        
+        .track-name { 
+            font-family: 'Playfair Display', serif;
+            font-size: 2.5rem; 
+            font-weight: 700; 
+            margin-bottom: 10px; 
+            color: #ffffff;
+            text-shadow: 0 2px 10px rgba(0,0,0,0.5);
+        }
+        
+        .artist-name { 
+            font-size: 1.4rem; 
+            color: #b3b3b3; 
+            font-weight: 400; 
+            margin-bottom: 25px; 
+            letter-spacing: 0.5px;
+        }
+        
+        .progress-bar { 
+            width: 100%; 
+            height: 8px; 
+            background: rgba(255,255,255,0.1); 
+            border-radius: 4px; 
+            margin: 25px 0; 
+            overflow: hidden;
+            box-shadow: inset 0 2px 4px rgba(0,0,0,0.3);
+        }
+        
+        .progress { 
+            height: 100%; 
+            background: linear-gradient(90deg, #ff6b6b, #4ecdc4, #45b7d1);
+            background-size: 200% 100%;
+            width: 0%; 
+            transition: width 0.1s ease; 
+            border-radius: 4px;
+            animation: progressGlow 2s ease-in-out infinite alternate;
+        }
+        
+        @keyframes progressGlow {
+            0% { box-shadow: 0 0 5px rgba(255, 107, 107, 0.5); background-position: 0% 50%; }
+            100% { box-shadow: 0 0 20px rgba(69, 183, 209, 0.8); background-position: 100% 50%; }
+        }
+        
+        .lyrics-stage {
+            background: rgba(0,0,0,0.9);
+            backdrop-filter: blur(40px);
+            padding: 40px;
+            border-radius: 30px;
+            border: 1px solid rgba(255,255,255,0.05);
+            width: 100%;
+            height: 600px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            position: relative;
+            overflow-y: auto;
+            overflow-x: hidden;
+            box-shadow: 0 30px 60px rgba(0,0,0,0.6);
+            scroll-behavior: smooth;
+            scrollbar-width: none;
+            -ms-overflow-style: none;
+        }
+        
+        .lyrics-stage::-webkit-scrollbar {
+            display: none;
+        }
+        
+        .lyrics-stage.calm-drift {
+            background: radial-gradient(ellipse at center, 
+                rgba(20, 20, 30, 0.95) 0%, 
+                rgba(10, 10, 15, 0.98) 100%);
+            backdrop-filter: blur(60px) saturate(1.2);
+        }
         
         .lyrics-container {
-            background: rgba(0,0,0,0.6); backdrop-filter: blur(15px); padding: 40px; border-radius: 25px;
-            border: 1px solid rgba(255,255,255,0.1); width: 100%; min-height: 300px; display: flex;
-            flex-direction: column; justify-content: center; align-items: center; text-align: center;
+            width: 100%;
+            max-width: 800px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            padding: 20px 0;
         }
         
-        .current-line { font-size: 2.8rem; font-weight: 600; line-height: 1.2; margin-bottom: 20px; transition: all 0.3s ease; }
-        .next-line { font-size: 1.8rem; font-weight: 400; opacity: 0.6; line-height: 1.3; }
+        .lyric-line {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            font-size: 1.6rem;
+            font-weight: 300;
+            line-height: 1.5;
+            padding: 20px 30px;
+            margin: 8px 0;
+            text-align: center;
+            border-radius: 12px;
+            transition: all 1.2s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+            transform: translateY(0px) scale(1);
+            opacity: 0.25;
+            filter: blur(0.5px);
+            letter-spacing: 0.3px;
+            cursor: pointer;
+        }
         
-        .highlighted-word { color: #1ed760; text-shadow: 0 0 15px rgba(30, 215, 96, 0.8); font-weight: 700; }
-        .upcoming-word { opacity: 0.4; }
+        .lyric-line.upcoming {
+            opacity: 0.25;
+            transform: translateY(8px) scale(0.96);
+            filter: blur(0.8px);
+            color: rgba(255, 255, 255, 0.4);
+        }
         
-        .status { position: absolute; top: 20px; right: 20px; padding: 8px 16px; background: rgba(30, 215, 96, 0.2); border: 1px solid #1ed760; border-radius: 20px; font-size: 0.9rem; }
+        .lyric-line.active {
+            opacity: 1;
+            transform: translateY(-2px) scale(1.02);
+            filter: blur(0px);
+            font-weight: 400;
+            font-size: 1.8rem;
+            color: rgba(255, 255, 255, 0.95);
+            background: linear-gradient(135deg, 
+                rgba(255, 255, 255, 0.03) 0%, 
+                rgba(255, 255, 255, 0.01) 100%);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            box-shadow: 
+                0 8px 32px rgba(0, 0, 0, 0.3),
+                inset 0 1px 0 rgba(255, 255, 255, 0.1);
+            animation: calmBreathe 4s ease-in-out infinite;
+        }
+        
+        .lyric-line.passed {
+            opacity: 0.15;
+            transform: translateY(-4px) scale(0.94);
+            filter: blur(1px);
+            color: rgba(255, 255, 255, 0.25);
+        }
+        
+        @keyframes calmBreathe {
+            0%, 100% { 
+                transform: translateY(-2px) scale(1.02);
+                opacity: 1;
+            }
+            50% { 
+                transform: translateY(-3px) scale(1.025);
+                opacity: 0.98;
+            }
+        }
+        
+        .highlighted-word,
+        .upcoming-word,
+        .line-transition,
+        .current-line,
+        .next-line {
+            display: none;
+        }
+        
+        /* NEW: Speaker Mode Visual Override */
+        body.speaker-mode {
+            background: radial-gradient(ellipse at center, 
+                rgba(8, 8, 12, 1) 0%, 
+                rgba(2, 2, 4, 1) 70%, 
+                rgba(0, 0, 0, 1) 100%);
+            overflow: hidden;
+        }
+
+        body.speaker-mode .header {
+            opacity: 0.1;
+            transform: scale(0.9);
+            transition: all 2s ease;
+        }
+
+        body.speaker-mode .track-info {
+            opacity: 0.15;
+            transform: translateY(-20px) scale(0.95);
+            background: transparent;
+            border: none;
+            box-shadow: none;
+            backdrop-filter: none;
+            transition: all 2s ease;
+        }
+
+        body.speaker-mode .track-info .progress-bar {
+            opacity: 0.2;
+            height: 2px;
+        }
+
+        body.speaker-mode .lyrics-stage {
+            background: transparent;
+            border: none;
+            box-shadow: none;
+            backdrop-filter: none;
+            padding: 0;
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+
+        body.speaker-mode .lyrics-container {
+            max-width: none;
+            gap: 0;
+            align-items: center;
+            min-height: auto;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+        }
+
+        /* Speaker Mode Typography */
+        body.speaker-mode .lyric-line {
+            font-family: 'Playfair Display', 'Georgia', serif;
+            font-size: 3.5rem;
+            font-weight: 400;
+            line-height: 1.3;
+            padding: 40px;
+            margin: 0;
+            letter-spacing: 0.3px;
+            background: transparent;
+            border: none;
+            border-radius: 0;
+            transition: all 2s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+            text-align: center;
+            opacity: 0;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: var(--locked-width, auto);
+            white-space: normal;
+            word-break: keep-all;
+        }
+
+        body.speaker-mode .lyric-line.upcoming {
+            opacity: 0;
+        }
+
+        body.speaker-mode .lyric-line.active {
+            opacity: 1;
+            transform: translate(calc(-50% + var(--line-x, 0px)), calc(-50% + var(--line-y, 0px))) 
+                       scale(var(--line-scale, 1)) 
+                       rotate(var(--line-rotate, 0deg));
+            filter: blur(0px);
+            font-weight: 500;
+            color: rgba(255, 255, 255, var(--line-opacity, 0.98));
+            background: transparent;
+            border: none;
+            box-shadow: none;
+            animation: speakerBreathe 6s ease-in-out infinite;
+            text-shadow: 0 2px 40px rgba(255, 255, 255, 0.1);
+            letter-spacing: var(--line-spacing, 0.3px);
+        }
+
+        body.speaker-mode .lyric-line.passed {
+            opacity: 0;
+        }
+
+        /* Speaker Mode Breathing Animation */
+        @keyframes speakerBreathe {
+            0%, 100% { 
+                transform: translate(calc(-50% + var(--line-x, 0px)), calc(-50% + var(--line-y, 0px))) 
+                           scale(var(--line-scale, 1)) 
+                           rotate(var(--line-rotate, 0deg));
+                opacity: var(--line-opacity, 0.98);
+            }
+            50% { 
+                transform: translate(calc(-50% + var(--line-x, 0px)), calc(-50% + var(--line-y, 0px))) 
+                           scale(calc(var(--line-scale, 1) * 1.02)) 
+                           rotate(var(--line-rotate, 0deg));
+                opacity: calc(var(--line-opacity, 0.98) * 0.96);
+            }
+        }
+
+        /* Intra-line word emphasis */
+        body.speaker-mode .lyric-line.active .emphasis-word {
+            font-weight: 700;
+            transform: scale(1.1);
+            opacity: 1;
+            display: inline-block;
+        }
+
+        /* Hide UI elements in speaker mode */
+        body.speaker-mode .music-visualizer {
+            opacity: 0.05;
+        }
+
+        body.speaker-mode .status {
+            opacity: 0.1;
+        }
+
+        /* Responsive adjustments for speaker mode */
+        @media (max-width: 768px) {
+            body.speaker-mode .lyric-line {
+                font-size: 2rem;
+                max-width: 90%;
+            }
+            
+            body.speaker-mode .lyric-line.active {
+                font-size: 2.6rem;
+            }
+        }
+        
+        .highlighted-word {
+            background: linear-gradient(45deg, #ff6b6b, #4ecdc4, #45b7d1);
+            background-size: 200% 200%;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            font-weight: 800;
+            text-shadow: none;
+            animation: wordGlow 0.8s ease-in-out, gradientFlow 3s ease-in-out infinite;
+            display: inline-block;
+            transform: scale(1.05);
+            filter: drop-shadow(0 0 10px rgba(255, 107, 107, 0.3));
+        }
+        
+        @keyframes wordGlow {
+            0% { transform: scale(1) translateY(0); }
+            50% { transform: scale(1.1) translateY(-2px); }
+            100% { transform: scale(1.05) translateY(0); }
+        }
+        
+        @keyframes gradientFlow {
+            0%, 100% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+        }
+        
+        .upcoming-word {
+            opacity: 0.3;
+            transition: all 0.3s ease;
+            filter: blur(0.5px);
+        }
+        
+        .line-transition {
+            animation: lineSlideIn 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        
+        @keyframes lineSlideIn {
+            0% { 
+                opacity: 0; 
+                transform: translateY(30px) scale(0.95); 
+                filter: blur(5px);
+            }
+            100% { 
+                opacity: 1; 
+                transform: translateY(0) scale(1); 
+                filter: blur(0);
+            }
+        }
+        
+        .status { 
+            position: fixed; 
+            top: 30px; 
+            right: 30px; 
+            padding: 12px 24px; 
+            background: rgba(0,0,0,0.8); 
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255,255,255,0.1); 
+            border-radius: 25px; 
+            font-size: 0.9rem; 
+            font-weight: 500;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+            z-index: 1000;
+        }
+        
+        .music-visualizer {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 3px;
+            opacity: 0.3;
+        }
+        
+        .bar {
+            width: 3px;
+            height: 20px;
+            background: linear-gradient(to top, #ff6b6b, #4ecdc4);
+            border-radius: 2px;
+            animation: musicBars 1.5s ease-in-out infinite;
+        }
+        
+        .bar:nth-child(2) { animation-delay: 0.1s; }
+        .bar:nth-child(3) { animation-delay: 0.2s; }
+        .bar:nth-child(4) { animation-delay: 0.3s; }
+        .bar:nth-child(5) { animation-delay: 0.4s; }
+        
+        @keyframes musicBars {
+            0%, 100% { height: 20px; }
+            50% { height: 40px; }
+        }
+        
+        @media (max-width: 768px) {
+            .header h1 { font-size: 2.5rem; }
+            .current-line { font-size: 2.2rem; }
+            .next-line { font-size: 1.4rem; }
+            .track-info, .lyrics-stage { padding: 30px 25px; }
+        }
     </style>
 </head>
 <body>
     <div class="status" id="status">🎵 Loading...</div>
+    
+    <!-- NEW: Speaker Mode Toggle Button -->
+    <button id="speakerToggle" onclick="toggleSpeakerMode()" style="
+        position: fixed;
+        bottom: 30px;
+        right: 30px;
+        background: rgba(255,255,255,0.1);
+        border: 1px solid rgba(255,255,255,0.2);
+        color: white;
+        padding: 12px 20px;
+        border-radius: 25px;
+        cursor: pointer;
+        font-size: 0.9rem;
+        backdrop-filter: blur(20px);
+        transition: all 0.3s ease;
+        z-index: 1000;
+    ">
+        🔊 Speaker Mode
+    </button>
     
     <div class="container">
         <div class="header">
@@ -94,9 +542,17 @@ def index():
             </div>
         </div>
         
-        <div class="lyrics-container">
-            <div class="current-line" id="currentLine">🎵 Your lyrics will appear here</div>
-            <div class="next-line" id="nextLine"></div>
+        <div class="lyrics-stage">
+            <div class="lyrics-container" id="lyricsContainer">
+                <div class="lyric-line">🎵 Your lyrics will appear here</div>
+            </div>
+            <div class="music-visualizer">
+                <div class="bar"></div>
+                <div class="bar"></div>
+                <div class="bar"></div>
+                <div class="bar"></div>
+                <div class="bar"></div>
+            </div>
         </div>
     </div>
 
@@ -136,20 +592,37 @@ def index():
                 const response = await fetch(`/lyrics?track=${encodeURIComponent(track)}&artist=${encodeURIComponent(artist)}`);
                 const data = await response.json();
                 lyrics = data.lines || [];
+                displayAllLyrics();
             } catch (error) {
                 lyrics = [];
+                displayAllLyrics();
             }
         }
 
-        function updateLyrics(progressMs) {
+        function displayAllLyrics() {
+            const container = document.getElementById('lyricsContainer');
+            
             if (lyrics.length === 0) {
-                document.getElementById('currentLine').innerHTML = '🎵 No lyrics available';
-                document.getElementById('nextLine').innerHTML = '';
+                container.innerHTML = '<div class="lyric-line">🎵 No lyrics available</div>';
                 return;
             }
+            
+            container.innerHTML = '';
+            lyrics.forEach((lyric, index) => {
+                const lineElement = document.createElement('div');
+                lineElement.className = 'lyric-line upcoming';
+                lineElement.textContent = lyric.words;
+                lineElement.dataset.index = index;
+                container.appendChild(lineElement);
+            });
+        }
+
+        function updateLyrics(progressMs) {
+            if (lyrics.length === 0) return;
 
             let currentLineIndex = -1;
             
+            // Find current line
             for (let i = 0; i < lyrics.length; i++) {
                 const lineTime = lyrics[i].startTimeMs;
                 const nextLineTime = i + 1 < lyrics.length ? lyrics[i + 1].startTimeMs : lineTime + 8000;
@@ -160,41 +633,149 @@ def index():
                 }
             }
             
-            if (currentLineIndex >= 0) {
-                const currentLyric = lyrics[currentLineIndex];
-                const nextLyric = currentLineIndex + 1 < lyrics.length ? lyrics[currentLineIndex + 1] : null;
+            // Apply calm-drift animation classes
+            const allLines = document.querySelectorAll('.lyric-line');
+            allLines.forEach((line, index) => {
+                // Remove all state classes
+                line.classList.remove('active', 'passed', 'upcoming');
                 
-                const words = currentLyric.words.split(' ');
-                const nextLineTime = nextLyric ? nextLyric.startTimeMs : currentLyric.startTimeMs + 6000;
-                const lineDuration = nextLineTime - currentLyric.startTimeMs;
-                const wordDuration = lineDuration / words.length;
-                const lineProgress = progressMs - currentLyric.startTimeMs;
-                const currentWordIndex = Math.floor(lineProgress / wordDuration);
-                
-                let highlightedLine = '';
-                words.forEach((word, index) => {
-                    if (index <= currentWordIndex) {
-                        highlightedLine += `<span class="highlighted-word">${word}</span> `;
+                // Add appropriate state class with subtle stagger
+                const delay = Math.abs(index - currentLineIndex) * 30;
+                setTimeout(() => {
+                    if (index === currentLineIndex) {
+                        line.classList.add('active');
+                        
+                        // Lock width and add spatial composition for speaker mode
+                        if (document.body.classList.contains('speaker-mode')) {
+                            // Measure and lock width to prevent reflow
+                            line.style.width = 'auto';
+                            const naturalWidth = line.offsetWidth;
+                            line.style.setProperty('--locked-width', `${naturalWidth}px`);
+                            
+                            // Deterministic randomness based on line content
+                            const seed = line.textContent.length + index;
+                            const random1 = Math.abs(Math.sin(seed * 12.9898) * 43758.5453) % 1;
+                            const random2 = Math.abs(Math.sin(seed * 78.233) * 43758.5453) % 1;
+                            const random3 = Math.abs(Math.sin(seed * 37.719) * 43758.5453) % 1;
+                            const random4 = Math.abs(Math.sin(seed * 93.456) * 43758.5453) % 1;
+                            const random5 = Math.abs(Math.sin(seed * 15.789) * 43758.5453) % 1;
+                            
+                            // Spatial placement system
+                            const placements = [
+                                { x: 0, y: 0 },           // center
+                                { x: -200, y: 0 },        // left third
+                                { x: 200, y: 0 },         // right third
+                                { x: -100, y: -120 },     // upper left
+                                { x: 100, y: -120 },      // upper right
+                                { x: -100, y: 120 },      // lower left
+                                { x: 100, y: 120 }       // lower right
+                            ];
+                            const placement = placements[Math.floor(random1 * placements.length)];
+                            
+                            // Size variation (3 tiers)
+                            const sizeTiers = [1.2, 0.9, 0.7]; // large, medium, small
+                            const sizeScale = sizeTiers[Math.floor(random2 * sizeTiers.length)];
+                            
+                            // Subtle rotation (occasionally)
+                            const rotation = random3 > 0.7 ? (random4 - 0.5) * 8 : 0; // ±4 degrees, 30% chance
+                            
+                            // Apply spatial composition
+                            line.style.setProperty('--line-x', `${placement.x}px`);
+                            line.style.setProperty('--line-y', `${placement.y}px`);
+                            line.style.setProperty('--line-scale', sizeScale);
+                            line.style.setProperty('--line-rotate', `${rotation}deg`);
+                            line.style.setProperty('--line-spacing', `${0.3 + (random5 - 0.5) * 0.4}px`);
+                            line.style.setProperty('--line-opacity', 0.95 + (random1 * 0.06));
+                            
+                            // Intra-line word emphasis
+                            const words = line.textContent.split(' ');
+                            if (words.length > 2) {
+                                const emphasisCount = Math.floor(random2 * 2) + 1; // 1-2 words
+                                const emphasizedWords = [];
+                                
+                                for (let i = 0; i < emphasisCount; i++) {
+                                    const wordIndex = Math.floor((random3 + i * 0.3) * words.length) % words.length;
+                                    if (!emphasizedWords.includes(wordIndex)) {
+                                        emphasizedWords.push(wordIndex);
+                                    }
+                                }
+                                
+                                const newHTML = words.map((word, idx) => {
+                                    if (emphasizedWords.includes(idx)) {
+                                        return `<span class="emphasis-word">${word}</span>`;
+                                    }
+                                    return word;
+                                }).join(' ');
+                                
+                                line.innerHTML = newHTML;
+                            }
+                        } else {
+                            // Reset variations in normal mode
+                            line.innerHTML = line.textContent; // Remove emphasis spans
+                            line.style.removeProperty('--locked-width');
+                            line.style.removeProperty('--line-scale');
+                            line.style.removeProperty('--line-x');
+                            line.style.removeProperty('--line-y');
+                            line.style.removeProperty('--line-rotate');
+                            line.style.removeProperty('--line-spacing');
+                            line.style.removeProperty('--line-opacity');
+                            
+                            line.scrollIntoView({ 
+                                behavior: 'smooth', 
+                                block: 'center',
+                                inline: 'center'
+                            });
+                        }
+                    } else if (index < currentLineIndex) {
+                        line.classList.add('passed');
                     } else {
-                        highlightedLine += `<span class="upcoming-word">${word}</span> `;
+                        line.classList.add('upcoming');
                     }
-                });
-                
-                document.getElementById('currentLine').innerHTML = highlightedLine;
-                document.getElementById('nextLine').innerHTML = nextLyric ? nextLyric.words : '';
-            } else {
-                if (progressMs < lyrics[0].startTimeMs) {
-                    document.getElementById('currentLine').innerHTML = '🎵 Music starting...';
-                    document.getElementById('nextLine').innerHTML = lyrics[0].words;
-                } else {
-                    document.getElementById('currentLine').innerHTML = '🎤 Song continues...';
-                    document.getElementById('nextLine').innerHTML = '';
-                }
+                }, delay);
+            });
+        }
+
+        function initializeCalmDrift() {
+            const lyricsStage = document.querySelector('.lyrics-stage');
+            if (lyricsStage) {
+                lyricsStage.classList.add('calm-drift');
             }
         }
 
+        // NEW: Speaker Mode Toggle Function
+        function toggleSpeakerMode() {
+            document.body.classList.toggle('speaker-mode');
+            
+            // Force scroll recalculation after mode change
+            setTimeout(() => {
+                const activeLine = document.querySelector('.lyric-line.active');
+                if (activeLine) {
+                    activeLine.scrollIntoView({ 
+                        behavior: 'smooth', 
+                        block: 'center',
+                        inline: 'center'
+                    });
+                }
+            }, 100);
+        }
+
+        // NEW: Auto-enable speaker mode (optional)
+        function initializeSpeakerMode() {
+            // Uncomment to enable speaker mode by default:
+            // document.body.classList.add('speaker-mode');
+        }
+
+        // NEW: Add keyboard shortcut for speaker mode
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 's' || e.key === 'S') {
+                toggleSpeakerMode();
+            }
+        });
+
         setInterval(updateAll, 500);
         updateAll();
+        initializeCalmDrift();
+        initializeSpeakerMode();
     </script>
 </body>
 </html>
