@@ -62,10 +62,31 @@
                         <div class="current-lyric" id="currentLyric"></div>
                         <div class="next-lyric" id="nextLyric"></div>
                     </div>
+                    
+                    <!-- Browsing State -->
+                    <div class="browsing-display" id="browsingDisplay" style="display: none;">
+                        <div class="browsing-header" id="browsingHeader">Browse</div>
+                        <div class="browsing-items" id="browsingItems"></div>
+                        <div class="browsing-loading" id="browsingLoading" style="display: none;">Loading...</div>
+                    </div>
                 </div>
             </div>
             
-            <!-- Playback Controls -->
+            <!-- Navigation Menu (Radial) -->
+            <div class="nav-menu" id="navMenu" style="display: none;">
+                <div class="nav-item" data-action="playlists">Playlists</div>
+                <div class="nav-item" data-action="albums">Albums</div>
+                <div class="nav-item" data-action="search">Search</div>
+                <div class="nav-item" data-action="recent">Recent</div>
+            </div>
+            
+            <!-- Menu Button (Top) -->
+            <div class="vinyl-menu-top">
+                <button class="control-btn menu-btn" id="menuBtn" title="Menu">☰</button>
+                <button class="control-btn menu-btn" id="backBtn" title="Back" style="display: none;">←</button>
+            </div>
+            
+            <!-- Playback Controls (Bottom) -->
             <div class="vinyl-controls">
                 <button class="control-btn" id="prevBtn">⏮</button>
                 <button class="control-btn" id="playPauseBtn">⏸</button>
@@ -74,6 +95,16 @@
         </div>
     </div>
     
+    <!-- Search Modal -->
+    <div class="search-modal" id="searchModal" style="display: none;">
+        <div class="search-content">
+            <input type="text" id="searchInput" placeholder="Search for songs, artists, albums..." autocomplete="off">
+            <div class="search-results" id="searchResults"></div>
+        </div>
+    </div>
+    
+    <!-- Load Spotify Web Playback SDK -->
+    <script src="https://sdk.scdn.co/spotify-player.js"></script>
     <script src="{{ url_for('static', filename='js/app.js') }}"></script>
 </body>
 </html>
