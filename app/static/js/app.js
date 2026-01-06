@@ -8,7 +8,7 @@ class SpotifyPlayer {
         this.currentTrack = null;
         this.lyrics = [];
         this.currentLyricIndex = -1;
-        this.isVinylMode = false;
+        this.isVinylMode = true;
         this.vinylState = 'idle'; // idle, track-info, lyrics, browsing
         this.browsingState = null; // playlists, albums, tracks, search
         this.browsingData = [];
@@ -36,6 +36,12 @@ class SpotifyPlayer {
         
         this.initializeElements();
         this.bindEvents();
+        this.enterVinylMode(); // Start in vinyl mode by default
+        // Update button to reflect vinyl mode is active
+        if (this.vinylBtn) {
+            this.vinylBtn.classList.add('active');
+            this.vinylBtn.textContent = 'Exit Vinyl';
+        }
         this.initializeWebPlaybackSDK();
         
         console.log('🎵 Spotify Player initialized');

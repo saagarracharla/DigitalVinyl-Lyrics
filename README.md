@@ -1,6 +1,6 @@
-# 🎤 Spotify Karaoke - Circular Player
+# 🎵 Digital Vinyl with Lyrics
 
-A full-featured Spotify player with real-time karaoke lyrics, designed for circular displays. Features a beautiful vinyl-style interface with browsing, playlist management, and synchronized lyrics.
+A beautiful circular Spotify player that brings the classic vinyl experience to life with real-time synchronized lyrics. Designed for circular displays with touch controls and a stunning vinyl-style interface.
 
 ## Features
 
