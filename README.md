@@ -2,6 +2,14 @@
 
 A beautiful circular Spotify player that brings the classic vinyl experience to life with real-time synchronized lyrics. Designed for circular displays with touch controls and a stunning vinyl-style interface.
 
+## Screenshots
+
+### Album View
+![Album View](app/Images/Album.png)
+
+### Lyrics View  
+![Lyrics View](app/Images/Lyrics.png)
+
 ## Features
 
 ✅ **Full Spotify Player** - Browse playlists, albums, search, and control playback  
