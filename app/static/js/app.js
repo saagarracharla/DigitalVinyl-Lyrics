@@ -691,8 +691,8 @@ class SpotifyPlayer {
         this.albumArt.classList.remove('blurred', 'paused');
         this.albumOverlay.classList.remove('visible');
         
-        this.vinylArtist.textContent = trackData.artist;
-        this.vinylTitle.textContent = trackData.track_name;
+        this.vinylArtist.textContent = trackData.track_name;
+        this.vinylTitle.textContent = trackData.artist;
         
         this.trackInfo.classList.add('visible');
         this.lyricDisplay.classList.remove('visible');
