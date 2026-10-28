@@ -273,6 +273,7 @@ class SpotifyService:
         images = album.get('images') or []
         return {
             'id': track.get('id'),
+            'uri': track.get('uri'),
             'name': track.get('name'),
             'artists': [a['name'] for a in track.get('artists', [])],
             'album': album.get('name'),

@@ -15,6 +15,8 @@ A beautiful circular Spotify player that brings the classic vinyl experience to 
 - **Spinning record**: the album cover turns like vinyl while music plays. Drag it around to scrub through the song (a full turn is 30 seconds).
 - **Synced lyrics**: lines scroll in time with the music over a colour taken from the album cover.
 - **Your library**: playlists, saved albums, recently played and search, all inside the circle.
+- **Queue**: see what's playing next, add songs with **+**, and tap a queued song to skip to it. Spotify's API can't remove or reorder queue items.
+- **Settings**: lyrics background (album colour, spinning cover or black), text size, current-line-only lyrics, fading song info, auto-hiding buttons, spin speed, scrub speed, progress ring style, idle clock and more. Saved on the device.
 - **Spotify Connect device**: shows up in Spotify as **Digital Vinyl**. It also follows music playing on your other devices.
 - **Made for round screens**: designed at 1080×1080 and scales to any square window.
 - **Free lyrics**: from [LRCLib](https://lrclib.net), no API key needed.
@@ -69,7 +71,9 @@ Visit: http://127.0.0.1:5004
 | Tap the record | Switch between the cover and lyrics (tap a paused record to resume) |
 | Top button | Open or close your library |
 | Bottom buttons | Previous, play/pause, next |
-| Library chips | Switch between Playlists, Albums and Recent; type in the search field to find songs |
+| Library chips | Switch between Playlists, Albums, Recent and Queue; type in the search field to find songs |
+| **+** on a song | Add it to the queue |
+| Gear chip | Settings |
 
 Playlists start in shuffle. On a keyboard: Space plays or pauses, ← / → skip back or forward 10 seconds, Esc closes the library.
 

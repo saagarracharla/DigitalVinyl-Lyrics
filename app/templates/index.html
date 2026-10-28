@@ -31,6 +31,10 @@
                 </svg>
 
                 <section class="idle-view">
+                    <div class="idle-clock" id="idleClock" aria-hidden="true">
+                        <div class="idle-time" id="idleTime"></div>
+                        <div class="idle-date" id="idleDate"></div>
+                    </div>
                     <svg class="idle-icon" viewBox="0 0 48 48" aria-hidden="true">
                         <circle cx="24" cy="24" r="21" fill="none" stroke="currentColor" stroke-width="2.5" />
                         <circle cx="24" cy="24" r="13" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.5" />
@@ -58,7 +62,7 @@
             <!-- Library: search, filters, and your playlists/albums/recents -->
             <section class="library" id="library" aria-label="Your Library" aria-hidden="true">
                 <div class="library-inner">
-                    <h2 class="library-title">Your Library</h2>
+                    <h2 class="library-title" id="libraryTitle">Your Library</h2>
                     <label class="search-field">
                         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2.2" /><path d="M15.5 15.5 21 21" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" /></svg>
                         <input id="searchInput" type="search" placeholder="Search songs or artists" autocomplete="off" spellcheck="false" aria-label="Search">
@@ -67,6 +71,10 @@
                         <button class="chip" type="button" role="tab" data-tab="playlists">Playlists</button>
                         <button class="chip" type="button" role="tab" data-tab="albums">Albums</button>
                         <button class="chip" type="button" role="tab" data-tab="recent">Recent</button>
+                        <button class="chip" type="button" role="tab" data-tab="queue">Queue</button>
+                        <button class="chip chip-icon" type="button" role="tab" data-tab="settings" aria-label="Settings">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.4 13a7.6 7.6 0 0 0 0-2l2-1.6-2-3.4-2.4 1a7.4 7.4 0 0 0-1.7-1L15 3.5h-4l-.3 2.5a7.4 7.4 0 0 0-1.7 1l-2.4-1-2 3.4L6.6 11a7.6 7.6 0 0 0 0 2l-2 1.6 2 3.4 2.4-1a7.4 7.4 0 0 0 1.7 1l.3 2.5h4l.3-2.5a7.4 7.4 0 0 0 1.7-1l2.4 1 2-3.4Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" /><circle cx="13" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.8" transform="translate(-1 0)" /></svg>
+                        </button>
                     </div>
                     <div class="library-list" id="libraryList"></div>
                 </div>
