@@ -2,108 +2,99 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🎤 Vinyl Karaoke Player</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#000000">
+    <title>Digital Vinyl</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
 </head>
 <body>
-    <!-- Normal Karaoke Mode -->
-    <div class="karaoke-container">
-        <div class="header">
-            <h1>🎤 Vinyl Karaoke</h1>
-            <div class="status" id="status">🎵 Play a song in Spotify to start</div>
-        </div>
-        
-        <div class="progress-container" id="progressContainer" style="display: none;">
-            <div class="progress-bar">
-                <div class="progress-fill" id="progressFill"></div>
-            </div>
-        </div>
-        
-        <div class="controls">
-            <button class="btn" id="vinylBtn">Vinyl Mode</button>
-            <button class="btn" id="refreshBtn">Refresh</button>
-        </div>
-        
-        <div class="lyrics-container" id="lyricsContainer"></div>
-    </div>
-    
-    <!-- Vinyl Mode - 1080x1080 Circular Display -->
-    <div class="vinyl-mode" id="vinylMode" style="display: none;">
-        <div class="vinyl-container">
-            <div class="vinyl-circle">
-                <!-- Circular Progress Ring -->
-                <svg class="progress-ring" viewBox="0 0 1080 1080">
-                    <circle class="progress-ring-bg" cx="540" cy="540" r="535" />
-                    <circle class="progress-ring-fill" cx="540" cy="540" r="535" id="progressRing" />
-                </svg>
-                
-                <!-- Album Art Background -->
+    <main class="stage">
+        <!-- Square frame for a round 1080x1080 display; everything inside scales with it -->
+        <div class="player" id="player" data-view="idle">
+
+            <!-- The record: drag to seek, tap to switch between cover and lyrics -->
+            <div class="disc" id="disc">
                 <div class="album-art" id="albumArt"></div>
-                <div class="album-overlay" id="albumOverlay"></div>
-                
-                <!-- Content Area -->
-                <div class="vinyl-content">
-                    <!-- Seek Timestamp -->
-                    <div class="seek-timestamp" id="seekTimestamp"></div>
-                    
-                    <!-- Pause Timestamp -->
-                    <div class="pause-timestamp" id="pauseTimestamp"></div>
-                    
-                    <!-- Track Info State -->
-                    <div class="track-info" id="trackInfo">
-                        <div class="artist" id="vinylArtist"></div>
-                        <div class="title" id="vinylTitle"></div>
-                    </div>
-                    
-                    <!-- Lyrics State -->
-                    <div class="lyric-display" id="lyricDisplay">
-                        <div class="previous-lyric" id="previousLyric"></div>
-                        <div class="current-lyric" id="currentLyric"></div>
-                        <div class="next-lyric" id="nextLyric"></div>
-                    </div>
-                    
-                    <!-- Browsing State -->
-                    <div class="browsing-display" id="browsingDisplay" style="display: none;">
-                        <div class="browsing-header" id="browsingHeader">Browse</div>
-                        <div class="browsing-items" id="browsingItems"></div>
-                        <div class="browsing-loading" id="browsingLoading" style="display: none;">Loading...</div>
-                    </div>
+                <div class="grooves"></div>
+                <div class="sheen"></div>
+                <div class="spindle"></div>
+                <div class="art-scrim"></div>
+                <div class="lyrics-backdrop"></div>
+
+                <svg class="progress-ring" viewBox="0 0 1080 1080" aria-hidden="true">
+                    <circle class="progress-track" cx="540" cy="540" r="532" />
+                    <circle class="progress-fill" id="progressFill" cx="540" cy="540" r="532" transform="rotate(-90 540 540)" />
+                    <circle class="progress-knob" id="progressKnob" cx="540" cy="8" r="16" />
+                </svg>
+
+                <section class="idle-view">
+                    <svg class="idle-icon" viewBox="0 0 48 48" aria-hidden="true">
+                        <circle cx="24" cy="24" r="21" fill="none" stroke="currentColor" stroke-width="2.5" />
+                        <circle cx="24" cy="24" r="13" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.5" />
+                        <circle cx="24" cy="24" r="4" fill="currentColor" />
+                    </svg>
+                    <h1>Nothing playing</h1>
+                    <p>Play something on Spotify and choose <strong>Digital Vinyl</strong> as your device.</p>
+                </section>
+
+                <section class="now-playing">
+                    <div class="track-title" id="trackTitle"></div>
+                    <div class="track-artist" id="trackArtist"></div>
+                </section>
+
+                <section class="lyrics-view" id="lyricsView">
+                    <div class="lyrics-lines" id="lyricsLines"></div>
+                </section>
+
+                <div class="seek-readout" aria-hidden="true">
+                    <span class="seek-time" id="seekTime">0:00</span>
+                    <span class="seek-total" id="seekTotal"></span>
                 </div>
             </div>
-            
-            <!-- Navigation Menu (Radial) -->
-            <div class="nav-menu" id="navMenu" style="display: none;">
-                <div class="nav-item" data-action="playlists">Playlists</div>
-                <div class="nav-item" data-action="albums">Albums</div>
-                <div class="nav-item" data-action="search">Search</div>
-                <div class="nav-item" data-action="recent">Recent</div>
+
+            <!-- Library: search, filters, and your playlists/albums/recents -->
+            <section class="library" id="library" aria-label="Your Library" aria-hidden="true">
+                <div class="library-inner">
+                    <h2 class="library-title">Your Library</h2>
+                    <label class="search-field">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2.2" /><path d="M15.5 15.5 21 21" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" /></svg>
+                        <input id="searchInput" type="search" placeholder="Search songs or artists" autocomplete="off" spellcheck="false" aria-label="Search">
+                    </label>
+                    <div class="chips" role="tablist">
+                        <button class="chip" type="button" role="tab" data-tab="playlists">Playlists</button>
+                        <button class="chip" type="button" role="tab" data-tab="albums">Albums</button>
+                        <button class="chip" type="button" role="tab" data-tab="recent">Recent</button>
+                    </div>
+                    <div class="library-list" id="libraryList"></div>
+                </div>
+            </section>
+
+            <button class="top-btn" id="libraryBtn" type="button" aria-label="Open library">
+                <svg class="icon-library" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3.5v17M9 3.5v17" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" /><path d="m13.5 4.2 5.8 15.6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" /></svg>
+                <svg class="icon-close" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 9 7 7 7-7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" /></svg>
+            </button>
+
+            <div class="transport">
+                <button class="icon-btn" id="prevBtn" type="button" aria-label="Previous">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="2.6" height="16" rx="1" /><path d="M20 4.9v14.2a.8.8 0 0 1-1.2.7L8.6 12.7a.8.8 0 0 1 0-1.4l10.2-7.1a.8.8 0 0 1 1.2.7Z" /></svg>
+                </button>
+                <button class="play-btn" id="playPauseBtn" type="button" aria-label="Play">
+                    <svg class="icon-play" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4.6v14.8a.9.9 0 0 0 1.4.8l11.6-7.4a.9.9 0 0 0 0-1.6L8.4 3.8A.9.9 0 0 0 7 4.6Z" /></svg>
+                    <svg class="icon-pause" viewBox="0 0 24 24" aria-hidden="true"><rect x="5.5" y="4" width="4.5" height="16" rx="1.2" /><rect x="14" y="4" width="4.5" height="16" rx="1.2" /></svg>
+                </button>
+                <button class="icon-btn" id="nextBtn" type="button" aria-label="Next">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="17.4" y="4" width="2.6" height="16" rx="1" /><path d="M4 4.9v14.2a.8.8 0 0 0 1.2.7l10.2-7.1a.8.8 0 0 0 0-1.4L5.2 4.2A.8.8 0 0 0 4 4.9Z" /></svg>
+                </button>
             </div>
-            
-            <!-- Menu Button (Top) -->
-            <div class="vinyl-menu-top">
-                <button class="control-btn menu-btn" id="menuBtn" title="Menu">☰</button>
-                <button class="control-btn menu-btn" id="backBtn" title="Back" style="display: none;">←</button>
-            </div>
-            
-            <!-- Playback Controls (Bottom) -->
-            <div class="vinyl-controls">
-                <button class="control-btn" id="prevBtn">⏮</button>
-                <button class="control-btn" id="playPauseBtn">⏸</button>
-                <button class="control-btn" id="nextBtn">⏭</button>
-            </div>
+
+            <div class="toast" id="toast" role="status" aria-live="polite"></div>
         </div>
-    </div>
-    
-    <!-- Search Modal -->
-    <div class="search-modal" id="searchModal" style="display: none;">
-        <div class="search-content">
-            <input type="text" id="searchInput" placeholder="Search for songs, artists, albums..." autocomplete="off">
-            <div class="search-results" id="searchResults"></div>
-        </div>
-    </div>
-    
-    <!-- Load Spotify Web Playback SDK -->
+    </main>
+
+    <!-- Spotify Web Playback SDK: makes this page a Spotify Connect device -->
     <script src="https://sdk.scdn.co/spotify-player.js"></script>
     <script src="{{ url_for('static', filename='js/app.js') }}"></script>
 </body>

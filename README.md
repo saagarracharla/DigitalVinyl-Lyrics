@@ -12,13 +12,12 @@ A beautiful circular Spotify player that brings the classic vinyl experience to 
 
 ## Features
 
-✅ **Full Spotify Player** - Browse playlists, albums, search, and control playback  
-✅ **Real-time Lyrics** - Synced word-by-word highlighting with smooth transitions  
-✅ **Circular UI Design** - Optimized for circular displays with vinyl-style interface  
-✅ **Playlist Support** - Play your playlists and saved albums  
-✅ **Web Playback SDK** - Real-time updates without polling  
-✅ **Touch Gestures** - Seek by dragging on the vinyl circle  
-✅ **Free Lyrics** - LRCLib API integration (no API key needed)  
+- **Spinning record**: the album cover turns like vinyl while music plays. Drag it around to scrub through the song (a full turn is 30 seconds).
+- **Synced lyrics**: lines scroll in time with the music over a colour taken from the album cover.
+- **Your library**: playlists, saved albums, recently played and search, all inside the circle.
+- **Spotify Connect device**: shows up in Spotify as **Digital Vinyl**. It also follows music playing on your other devices.
+- **Made for round screens**: designed at 1080×1080 and scales to any square window.
+- **Free lyrics**: from [LRCLib](https://lrclib.net), no API key needed.
 
 ## Requirements
 
@@ -64,18 +63,15 @@ Visit: http://127.0.0.1:5004
 
 ## Usage
 
-### Basic Playback
-- **Menu Button (Top)**: Access playlists, albums, search, and recently played
-- **Play/Pause**: Center button at bottom
-- **Previous/Next**: Left and right buttons at bottom
-- **Seek**: Drag your finger around the vinyl circle to seek
+| Action | What it does |
+|---|---|
+| Drag around the record | Scrub forward or back |
+| Tap the record | Switch between the cover and lyrics (tap a paused record to resume) |
+| Top button | Open or close your library |
+| Bottom buttons | Previous, play/pause, next |
+| Library chips | Switch between Playlists, Albums and Recent; type in the search field to find songs |
 
-### Browsing
-- Click **Menu** → Select **Playlists** to browse your playlists
-- Click any playlist to **play it with shuffle enabled**
-- Click **Albums** to browse your saved albums
-- Click **Search** to search for tracks
-- Click **Recent** to see recently played tracks
+Playlists start in shuffle. On a keyboard: Space plays or pauses, ← / → skip back or forward 10 seconds, Esc closes the library.
 
 ## Architecture
 
@@ -87,7 +83,7 @@ Visit: http://127.0.0.1:5004
 ### Frontend
 - **Spotify Web Playback SDK** - Real-time playback control
 - **Vanilla JavaScript** - No frameworks, pure JS
-- **Modern CSS** - Glassmorphism and vinyl-style design
+- **CSS container query units** - one layout that scales with the circle
 
 ### Key Components
 - `main.py` - Flask application and routes
@@ -109,7 +105,7 @@ Visit: http://127.0.0.1:5004
 
 ## Technical Details
 
-- **Real-time Updates**: Web Playback SDK events + 100ms position polling for smooth lyrics
+- **Real-time Updates**: Web Playback SDK events, plus a once-a-second sync that also follows playback on other devices
 - **Lyrics Sync**: Millisecond-accurate timing with LRCLib
 - **Circular Design**: Optimized for 1080x1080 circular displays
 

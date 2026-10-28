@@ -1,7 +1,35 @@
 /**
- * Full Spotify Player with Web Playback SDK
- * Circular screen optimized for 1080x1080
+ * Digital Vinyl: a circular Spotify player with synced lyrics.
+ * Built for a round 1080x1080 display; the layout scales with the circle.
  */
+
+const DEVICE_NAME = 'Digital Vinyl';
+
+const SPIN_DEGREES_PER_MS = 360 / 20000;   // one turn every 20s while playing
+const SEEK_MS_PER_DEGREE = 30000 / 360;    // a full turn of the record seeks 30s
+const TAP_MAX_DEGREES = 3;                 // turning less than this counts as a tap
+const MIN_SEEK_MS = 500;                   // smaller net drags don't seek
+const ART_INTRO_MS = 4000;                 // show the cover this long before lyrics on a new track
+const SEEK_SETTLE_MS = 2000;               // after seeking, ignore stale positions for this long
+const SYNC_INTERVAL_MS = 1000;
+const TOAST_MS = 2600;
+
+const RING_RADIUS = 532;                   // matches the SVG in index.html (viewBox 1080)
+const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
+
+const LIBRARY_SOURCES = {
+    playlists: { url: '/api/playlists?limit=50', kind: 'playlist' },
+    albums: { url: '/api/albums?limit=50', kind: 'album' },
+    recent: { url: '/api/recently-played?limit=50', kind: 'track' },
+};
+
+const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+
+// The SDK calls this global once it has loaded; it may fire before or after the player is constructed
+const spotifySDKReady = new Promise(resolve => {
+    window.onSpotifyWebPlaybackSDKReady = resolve;
+});
+
 // Escape text from the Spotify API (playlist names are user-written) before putting it in innerHTML
 function escapeHtml(value) {
     return String(value ?? '').replace(/[&<>"']/g, ch => ({
@@ -9,187 +37,160 @@ function escapeHtml(value) {
     })[ch]);
 }
 
-// One full turn of the record every 20 seconds while playing
-const SPIN_DEGREES_PER_MS = 360 / 20000;
+function formatTime(ms) {
+    const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+}
 
-class SpotifyPlayer {
+function clamp(value, min, max) {
+    return Math.min(max, Math.max(min, value));
+}
+
+// Spotify returns images largest first; rows only need a small one
+function smallImage(images) {
+    if (!images || images.length === 0) return '';
+    const small = images.find(image => image.width && image.width <= 300);
+    return (small || images[images.length - 1] || images[0]).url || '';
+}
+
+// Hue and saturation of an album cover, weighted toward vivid mid-tone pixels
+function coverHueSaturation(image) {
+    const size = 24;
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const context = canvas.getContext('2d', { willReadFrequently: true });
+    context.drawImage(image, 0, 0, size, size);
+    const pixels = context.getImageData(0, 0, size, size).data;
+
+    let r = 0, g = 0, b = 0, total = 0;
+    for (let i = 0; i < pixels.length; i += 4) {
+        const pr = pixels[i] / 255, pg = pixels[i + 1] / 255, pb = pixels[i + 2] / 255;
+        const max = Math.max(pr, pg, pb), min = Math.min(pr, pg, pb);
+        const lightness = (max + min) / 2;
+        const saturation = max === min ? 0 : (max - min) / (1 - Math.abs(2 * lightness - 1));
+        const weight = 0.05 + saturation * (1 - Math.abs(lightness - 0.5) * 2);
+        r += pr * weight; g += pg * weight; b += pb * weight; total += weight;
+    }
+    r /= total; g /= total; b /= total;
+
+    const max = Math.max(r, g, b), min = Math.min(r, g, b);
+    const lightness = (max + min) / 2;
+    if (max === min) return { hue: 0, saturation: 0 };
+    const delta = max - min;
+    const saturation = delta / (1 - Math.abs(2 * lightness - 1));
+    let hue;
+    if (max === r) hue = ((g - b) / delta) % 6;
+    else if (max === g) hue = (b - r) / delta + 2;
+    else hue = (r - g) / delta + 4;
+    return { hue: (hue * 60 + 360) % 360, saturation };
+}
+
+class VinylPlayer {
     constructor() {
-        // State
-        this.currentTrack = null;
+        // Playback
+        this.track = null;            // { key, name, artist, artists, art, durationMs, uri, contextUri }
+        this.isPlaying = false;
+        this.positionMs = 0;          // position at positionAt; interpolated between updates
+        this.positionAt = performance.now();
+        this.seekTarget = 0;
+        this.seekSettleUntil = 0;
+
+        // Lyrics
         this.lyrics = [];
-        this.currentLyricIndex = -1;
-        this.isVinylMode = true;
-        this.vinylState = 'idle'; // idle, track-info, lyrics, browsing
-        this.browsingState = null; // playlists, albums, tracks, search
-        this.browsingData = [];
-        this.selectedIndex = 0;
-        
-        // Web Playback SDK
+        this.lyricIndex = -1;
+        this.showLyrics = true;
+        this.introUntil = 0;
+        this.introTimer = null;
+
+        // View
+        this.view = 'idle';
+        this.drag = null;
+        this.rotation = 0;
+        this.lastFrameTime = null;
+        this.toastTimer = null;
+
+        // Library
+        this.libraryTab = 'playlists';
+        this.libraryRequest = 0;
+        this.searchTimer = null;
+
+        // Spotify
         this.player = null;
         this.deviceId = null;
         this.isSDKReady = false;
-        this.pollingInterval = null;
-        
-        // Progress tracking
-        this.actualCurrentPosition = 0;
-        this.lastUpdateTime = 0;
-        this.smoothProgressInterval = null;
-        this.lyricsUpdateInterval = null; // For continuous lyric updates
-        this.isDragging = false;
-        this.activePointerId = null;
-        this.justSeeked = false;
-        this.lyricsTransitionTimeout = null;
-        
-        // Record rotation, driven from JS so dragging continues from wherever the record is
-        this.isPlaying = false;
-        this.rotation = 0;
-        this.lastFrameTime = null;
-        this.seekPosition = 0;
-        this.gestureStartPosition = 0;
-        this.totalAngleChange = 0;
-        this.lastAngle = 0;
-        this.centerX = 0;
-        this.centerY = 0;
-        
-        this.initializeElements();
+
+        this.el = Object.fromEntries([
+            'player', 'disc', 'albumArt', 'progressFill', 'progressKnob', 'trackTitle', 'trackArtist',
+            'lyricsView', 'lyricsLines', 'seekTime', 'seekTotal', 'library', 'searchInput', 'libraryList',
+            'libraryBtn', 'prevBtn', 'playPauseBtn', 'nextBtn', 'toast'
+        ].map(id => [id, document.getElementById(id)]));
+        this.el.chips = [...document.querySelectorAll('.chip')];
+
         this.bindEvents();
-        this.startSpinLoop();
-        this.enterVinylMode(); // Start in vinyl mode by default
-        // Update button to reflect vinyl mode is active
-        if (this.vinylBtn) {
-            this.vinylBtn.classList.add('active');
-            this.vinylBtn.textContent = 'Exit Vinyl';
-        }
+        requestAnimationFrame(now => this.frame(now));
+
+        // Show whatever is playing right away (even on another device), then keep in sync
+        this.sync();
+        setInterval(() => this.sync(), SYNC_INTERVAL_MS);
         this.initializeWebPlaybackSDK();
-        
-        console.log('🎵 Spotify Player initialized');
     }
-    
-    initializeElements() {
-        // Normal mode
-        this.statusEl = document.getElementById('status');
-        this.progressContainer = document.getElementById('progressContainer');
-        this.progressFill = document.getElementById('progressFill');
-        this.lyricsContainer = document.getElementById('lyricsContainer');
-        this.vinylBtn = document.getElementById('vinylBtn');
-        this.refreshBtn = document.getElementById('refreshBtn');
-        
-        // Vinyl mode
-        this.vinylMode = document.getElementById('vinylMode');
-        this.vinylCircle = document.querySelector('.vinyl-circle');
-        this.albumArt = document.getElementById('albumArt');
-        this.albumOverlay = document.getElementById('albumOverlay');
-        this.trackInfo = document.getElementById('trackInfo');
-        this.lyricDisplay = document.getElementById('lyricDisplay');
-        this.browsingDisplay = document.getElementById('browsingDisplay');
-        this.vinylArtist = document.getElementById('vinylArtist');
-        this.vinylTitle = document.getElementById('vinylTitle');
-        this.previousLyric = document.getElementById('previousLyric');
-        this.currentLyric = document.getElementById('currentLyric');
-        this.nextLyric = document.getElementById('nextLyric');
-        this.browsingItems = document.getElementById('browsingItems');
-        this.browsingHeader = document.getElementById('browsingHeader');
-        this.browsingLoading = document.getElementById('browsingLoading');
-        
-        // Controls
-        this.prevBtn = document.getElementById('prevBtn');
-        this.playPauseBtn = document.getElementById('playPauseBtn');
-        this.nextBtn = document.getElementById('nextBtn');
-        this.menuBtn = document.getElementById('menuBtn');
-        this.backBtn = document.getElementById('backBtn');
-        this.navMenu = document.getElementById('navMenu');
-        
-        // Timestamps
-        this.seekTimestamp = document.getElementById('seekTimestamp');
-        this.pauseTimestamp = document.getElementById('pauseTimestamp');
-        
-        // Progress ring
-        this.progressRing = document.getElementById('progressRing');
-        this.progressCircumference = 2 * Math.PI * 535;
-        
-        // Search
-        this.searchModal = document.getElementById('searchModal');
-        this.searchInput = document.getElementById('searchInput');
-        this.searchResults = document.getElementById('searchResults');
-        
-    }
-    
+
     bindEvents() {
-        // Normal mode buttons
-        this.vinylBtn?.addEventListener('click', () => this.toggleVinylMode());
-        this.refreshBtn?.addEventListener('click', () => location.reload());
-        
-        // Playback controls
-        this.prevBtn?.addEventListener('click', () => this.previousTrack());
-        this.playPauseBtn?.addEventListener('click', () => this.playPause());
-        this.nextBtn?.addEventListener('click', () => this.nextTrack());
-        this.menuBtn?.addEventListener('click', () => this.toggleNavMenu());
-        this.backBtn?.addEventListener('click', () => this.goBack());
-        
-        // Navigation menu
-        this.navMenu?.querySelectorAll('.nav-item').forEach(item => {
-            item.addEventListener('click', (e) => {
-                const action = e.target.dataset.action;
-                this.handleNavAction(action);
+        const { disc } = this.el;
+        disc.addEventListener('pointerdown', e => this.handlePointerDown(e));
+        disc.addEventListener('pointermove', e => this.handlePointerMove(e));
+        disc.addEventListener('pointerup', e => this.handlePointerUp(e));
+        disc.addEventListener('pointercancel', e => this.handlePointerUp(e));
+
+        this.el.playPauseBtn.addEventListener('click', () => this.playPause());
+        this.el.prevBtn.addEventListener('click', () => this.previousTrack());
+        this.el.nextBtn.addEventListener('click', () => this.nextTrack());
+        this.el.libraryBtn.addEventListener('click', () => this.toggleLibrary());
+
+        this.el.chips.forEach(chip => {
+            chip.addEventListener('click', () => {
+                this.el.searchInput.value = '';
+                this.loadLibraryTab(chip.dataset.tab);
             });
         });
-        
-        // Drag gestures: pointer events cover touch and mouse
-        this.vinylCircle?.addEventListener('pointerdown', (e) => this.handlePointerDown(e));
-        this.vinylCircle?.addEventListener('pointermove', (e) => this.handlePointerMove(e));
-        this.vinylCircle?.addEventListener('pointerup', (e) => this.handlePointerUp(e));
-        this.vinylCircle?.addEventListener('pointercancel', (e) => this.handlePointerUp(e));
-        
-        // Search
-        this.searchInput?.addEventListener('input', (e) => this.handleSearchInput(e));
-        this.searchInput?.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
-                this.performSearch(this.searchInput.value);
-            } else if (e.key === 'Escape') {
-                this.closeSearch();
-            }
-        });
-        
-        // Click outside to close modals
-        document.addEventListener('click', (e) => {
-            // The menu's Search item opens the modal on this same click, so it doesn't count as outside
-            if (this.searchModal && !this.searchModal.contains(e.target) && e.target !== this.menuBtn && !this.navMenu?.contains(e.target)) {
-                if (this.searchModal.style.display !== 'none') {
-                    this.closeSearch();
-                }
-            }
-        });
+        this.el.searchInput.addEventListener('input', () => this.handleSearchInput());
+
+        document.addEventListener('keydown', e => this.handleKeydown(e));
+        window.addEventListener('resize', () => this.renderLyricPosition(true));
+
+        // Browsers only allow audio after a user gesture; let the SDK use the first one
+        document.addEventListener('pointerdown', () => this.player?.activateElement?.(), { capture: true });
     }
-    
+
+    // ---------- Spotify connection ----------
+
     async fetchAccessToken() {
-        const tokenResponse = await fetch('/api/access-token');
-        const tokenData = await tokenResponse.json();
-        if (tokenData.error) {
-            throw new Error(tokenData.error);
+        const response = await fetch('/api/access-token');
+        const data = await response.json();
+        if (data.error) {
+            throw new Error(data.error);
         }
-        return tokenData.access_token;
+        return data.access_token;
     }
 
     async initializeWebPlaybackSDK() {
         try {
             // Check we can get a token before loading the player
             await this.fetchAccessToken();
-
-            // Wait for SDK to load
-            if (window.Spotify) {
-                this.setupPlayer();
-            } else {
-                window.onSpotifyWebPlaybackSDKReady = () => this.setupPlayer();
-            }
+            await spotifySDKReady;
+            this.setupPlayer();
         } catch (error) {
+            // Without the SDK, sync() keeps showing and controlling playback on other devices
             console.error('SDK initialization error:', error);
-            this.startPollingFallback();
         }
     }
-    
+
     setupPlayer() {
         this.player = new Spotify.Player({
-            name: 'Circular Spotify Player',
+            name: DEVICE_NAME,
             // The SDK calls this on connect and again whenever its token expires (hourly),
             // so fetch a fresh one each time instead of reusing the first
             getOAuthToken: cb => {
@@ -199,53 +200,29 @@ class SpotifyPlayer {
             },
             volume: 0.5
         });
-        
-        // Error handling
-        this.player.addListener('initialization_error', ({ message }) => {
-            console.error('SDK initialization error:', message);
-            this.startPollingFallback();
-        });
-        
-        this.player.addListener('authentication_error', ({ message }) => {
-            console.error('SDK authentication error:', message);
-            this.startPollingFallback();
-        });
-        
+
+        this.player.addListener('initialization_error', ({ message }) => console.error('SDK initialization error:', message));
+        this.player.addListener('authentication_error', ({ message }) => console.error('SDK authentication error:', message));
         this.player.addListener('account_error', ({ message }) => {
             console.error('SDK account error:', message);
+            this.showToast('Spotify Premium is needed to play on this device');
         });
-        
-        // Ready
+
         this.player.addListener('ready', ({ device_id }) => {
             console.log('✅ Web Playback SDK ready with Device ID:', device_id);
             this.deviceId = device_id;
             this.isSDKReady = true;
             this.transferPlayback(device_id);
         });
-        
-        // Not ready
         this.player.addListener('not_ready', ({ device_id }) => {
             console.log('Device has gone offline:', device_id);
+            this.isSDKReady = false;
         });
-        
-        // State changes - THIS REPLACES POLLING!
-        this.player.addListener('player_state_changed', (state) => {
-            if (!state) return;
-            this.handlePlayerStateChange(state);
-        });
-        
-        // Also poll for position updates to ensure lyrics stay in sync
-        // Web Playback SDK events don't fire frequently enough for smooth lyric updates
-        this.startLyricsUpdateInterval();
-        
-        // Connect
-        this.player.connect().then(success => {
-            if (success) {
-                console.log('✅ Connected to Spotify!');
-            }
-        });
+        this.player.addListener('player_state_changed', state => this.applySdkState(state));
+
+        this.player.connect();
     }
-    
+
     async transferPlayback(deviceId) {
         try {
             await fetch('/api/transfer-playback', {
@@ -257,1112 +234,605 @@ class SpotifyPlayer {
             console.error('Transfer playback error:', error);
         }
     }
-    
-    handlePlayerStateChange(state) {
-        if (!state || !state.track_window || !state.track_window.current_track) {
-            console.log('No track in state');
-                return;
-            }
-            
-        const track = state.track_window.current_track;
-        const position = state.position;
-        const duration = state.duration;
-        const paused = state.paused;
-        
-        // Check if new track - more robust comparison
-        const isNewTrack = !this.currentTrack || 
-            this.currentTrack.track_name !== track.name ||
-            this.currentTrack.artist !== (track.artists[0]?.name || '');
-        
-        if (isNewTrack) {
-            console.log('New track detected:', track.name, 'by', track.artists[0]?.name);
-            this.handleNewTrack({
-                track_name: track.name,
-                artist: track.artists[0]?.name || 'Unknown Artist',
-                album_art: track.album?.images?.[0]?.url,
-                duration_ms: duration,
-                progress_ms: position,
-                is_playing: !paused
-            });
-        }
-        
-        // Update progress
-        // If we just seeked, check if the position matches our seek (within 2 seconds)
-        // If so, clear justSeeked flag early and update progress immediately
-        if (this.justSeeked && Math.abs(position - this.seekPosition) < 2000) {
-            console.log('Seek confirmed, resuming updates');
-            this.justSeeked = false;
-            this.actualCurrentPosition = position;
-            this.lastUpdateTime = Date.now();
-            // Update progress bar immediately with confirmed position
-            const progress = Math.min(1, Math.max(0, position / duration));
-            this.updateProgressBars(progress);
-            // Restart smooth progress if playing
-            if (!paused && !this.smoothProgressInterval) {
-                this.startSmoothProgress(duration);
-            }
-        }
-        
-        if (!this.isDragging && !this.justSeeked) {
-            // Ensure we're updating for the current track
-            if (this.currentTrack && 
-                this.currentTrack.track_name === track.name &&
-                this.currentTrack.duration_ms === duration) {
-                this.actualCurrentPosition = position;
-                this.lastUpdateTime = Date.now();
-                const progress = Math.min(1, Math.max(0, position / duration));
-                this.updateProgressBars(progress);
-                
-                if (!paused && !this.smoothProgressInterval) {
-                    this.startSmoothProgress(duration);
-                } else if (paused) {
-                    this.stopSmoothProgress();
-                }
-            }
-            
-            // Also update lyrics immediately when position changes (backup to interval)
-            if (this.lyrics.length > 0) {
-                const newIndex = this.findCurrentLyricIndex(position);
-                if (newIndex !== this.currentLyricIndex) {
-                    this.currentLyricIndex = newIndex;
-                    this.updateActiveLyric();
-                }
-            }
-        }
-        
-        // Note: Lyrics are updated via startLyricsUpdateInterval() for smoother updates
-        // This event-based update is kept as backup but the interval is more reliable
-        
-        this.isPlaying = !paused;
-        
-        // Handle pause/play
-        if (paused && this.vinylState === 'lyrics') {
-            this.handlePause();
-        } else if (!paused) {
-                // Hide pause timestamp when resuming
-            if (this.pauseTimestamp) {
-                    this.pauseTimestamp.classList.remove('visible');
-            }
-            // If we have lyrics and were in track-info, transition to lyrics
-            if (this.vinylState === 'track-info' && this.lyrics.length > 0) {
-                    this.transitionToVinylLyrics();
-                }
-        }
-        
-        // Update play/pause button
-        this.playPauseBtn.textContent = paused ? '▶' : '⏸';
-    }
-    
-    startLyricsUpdateInterval() {
-        // Update lyrics position every 100ms for smooth updates
-        // This works alongside Web Playback SDK events
-        if (this.lyricsUpdateInterval) {
-            clearInterval(this.lyricsUpdateInterval);
-        }
-        
-        this.lyricsUpdateInterval = setInterval(() => {
-            if (!this.currentTrack || this.lyrics.length === 0 || this.isDragging) {
-                return;
-            }
-            
-            // Try to get position from Web Playback SDK first
-            if (this.player && this.isSDKReady) {
-                this.player.getCurrentState().then(state => {
-                    if (state && !state.paused && state.position !== null && state.position !== undefined) {
-                        const newIndex = this.findCurrentLyricIndex(state.position);
-                        if (newIndex !== this.currentLyricIndex) {
-                            this.currentLyricIndex = newIndex;
-                            this.updateActiveLyric();
-                        }
-                    }
-                }).catch(err => {
-                    // If SDK fails, use interpolated position
-                    if (this.actualCurrentPosition > 0 && this.lastUpdateTime > 0) {
-                        const timeSinceUpdate = Date.now() - this.lastUpdateTime;
-                        const interpolatedPosition = this.actualCurrentPosition + timeSinceUpdate;
-                        const newIndex = this.findCurrentLyricIndex(interpolatedPosition);
-                        if (newIndex !== this.currentLyricIndex) {
-                            this.currentLyricIndex = newIndex;
-                            this.updateActiveLyric();
-                        }
-                    }
-                });
-            } else {
-                // Fallback: use interpolated position if SDK not available
-                if (this.actualCurrentPosition > 0 && this.lastUpdateTime > 0) {
-                    const timeSinceUpdate = Date.now() - this.lastUpdateTime;
-                    const interpolatedPosition = this.actualCurrentPosition + timeSinceUpdate;
-                    const newIndex = this.findCurrentLyricIndex(interpolatedPosition);
-                    if (newIndex !== this.currentLyricIndex) {
-                        this.currentLyricIndex = newIndex;
-                        this.updateActiveLyric();
-                    }
-                }
-            }
-        }, 100); // Update every 100ms for smooth lyric transitions
-    }
-    
-    startPollingFallback() {
-        // Several SDK error events can each trigger the fallback; only start it once
-        if (this.pollingInterval) return;
-        console.log('⚠️ Using polling fallback (SDK not available)');
-        this.pollingInterval = setInterval(() => this.checkCurrentTrack(), 500);
-        // Also start lyrics update interval for fallback
-        this.startLyricsUpdateInterval();
-    }
-    
-    async checkCurrentTrack() {
+
+    // Playback is on this device: read state from the SDK. Otherwise ask the server.
+    async sync() {
         try {
+            if (this.isSDKReady) {
+                const state = await this.player.getCurrentState();
+                if (state) {
+                    this.applySdkState(state);
+                    return;
+                }
+            }
             const response = await fetch('/current-track');
             const data = await response.json();
-            
             if (data.error) {
                 console.error('Current track error:', data.error);
                 return;
             }
-            
-            this.isPlaying = Boolean(data.is_playing);
-            if (data.is_playing) {
-                // Check if new track - more robust comparison
-                const isNewTrack = !this.currentTrack || 
-                    this.currentTrack.track_name !== data.track_name ||
-                    this.currentTrack.artist !== data.artist;
-                
-                if (isNewTrack) {
-                    console.log('New track detected (polling):', data.track_name, 'by', data.artist);
-                    await this.handleNewTrack(data);
-                } else {
-                    this.updateTiming(data);
-                }
-            } else {
-                // Not playing - clear lyrics display if needed
-                if (!this.isVinylMode && this.statusEl) {
-                    this.statusEl.textContent = '⏸️ Paused';
-                }
+            if (!data.track_name) {
+                this.clearTrack();
+                return;
             }
+            this.applyPlayback({
+                name: data.track_name,
+                artist: data.artist,
+                artists: data.artists || data.artist,
+                art: data.album_art,
+                durationMs: data.duration_ms,
+                positionMs: data.progress_ms,
+                isPlaying: data.is_playing,
+                uri: data.uri,
+                contextUri: data.context_uri
+            });
         } catch (error) {
-            console.error('Polling error:', error);
+            console.error('Sync error:', error);
         }
     }
-    
-    updateTiming(trackData) {
-        if (!this.isDragging && !this.justSeeked) {
-            this.actualCurrentPosition = trackData.progress_ms;
-            this.lastUpdateTime = Date.now();
-            const progress = trackData.progress_ms / trackData.duration_ms;
-            this.updateProgressBars(progress);
-            
-            if (!this.smoothProgressInterval) {
-                this.startSmoothProgress(trackData.duration_ms);
-            }
-        }
-        
-        // Update lyrics - this is the main update path for polling fallback
-        if (this.lyrics.length > 0 && !this.isDragging) {
-            const newIndex = this.findCurrentLyricIndex(trackData.progress_ms);
-            if (newIndex !== this.currentLyricIndex) {
-                this.currentLyricIndex = newIndex;
-                this.updateActiveLyric();
-            }
-        }
+
+    applySdkState(state) {
+        const track = state?.track_window?.current_track;
+        if (!track) return;
+        const images = [...(track.album?.images || [])].sort((a, b) => (b.width || 0) - (a.width || 0));
+        this.applyPlayback({
+            name: track.name,
+            artist: track.artists[0]?.name || 'Unknown Artist',
+            artists: track.artists.map(artist => artist.name).join(', '),
+            art: images[0]?.url,
+            durationMs: state.duration,
+            positionMs: state.position,
+            isPlaying: !state.paused,
+            uri: track.uri,
+            contextUri: state.context?.uri
+        });
     }
-    
-    async handleNewTrack(trackData) {
-        // Immediately clear everything first
-        this.clearLyrics();
-        this.clearVinylLyrics(); // Clear vinyl mode lyrics immediately
-        
-        // Stop any existing progress intervals, and drop a lyrics transition queued for the previous track
-        this.stopSmoothProgress();
-        clearTimeout(this.lyricsTransitionTimeout);
-        
-        // Reset progress tracking for new track
-        // Use the provided position if available, otherwise start at 0
-        const initialPosition = trackData.progress_ms || 0;
-        this.actualCurrentPosition = initialPosition;
-        this.lastUpdateTime = Date.now();
-        
-        // Reset progress bars to initial position
-        if (trackData.duration_ms && trackData.duration_ms > 0) {
-            const initialProgress = initialPosition / trackData.duration_ms;
-            this.updateProgressBars(initialProgress);
-        } else {
-            this.updateProgressBars(0);
+
+    applyPlayback(playback) {
+        const now = performance.now();
+        const interpolated = this.currentPositionMs(now);
+        const key = `${playback.name}\u0000${playback.artist}`;
+
+        if (!this.track || this.track.key !== key) {
+            this.loadTrack({ ...playback, key });
+        } else if (!this.drag) {
+            // Right after a seek, updates can still carry the old position; keep ours until they catch up
+            const settling = now < this.seekSettleUntil && Math.abs(playback.positionMs - this.seekTarget) > 2000;
+            this.setPosition(settling ? interpolated : playback.positionMs);
+            if (!settling) this.seekSettleUntil = 0;
         }
-        
-        // Update current track
-        this.currentTrack = trackData;
-        this.currentLyricIndex = -1;
+
+        if (this.track.contextUri !== playback.contextUri || this.track.uri !== playback.uri) {
+            this.track.contextUri = playback.contextUri;
+            this.track.uri = playback.uri;
+            this.highlightPlayingRows();
+        }
+
+        this.isPlaying = playback.isPlaying;
+        this.el.player.classList.toggle('is-playing', this.isPlaying);
+        this.el.playPauseBtn.setAttribute('aria-label', this.isPlaying ? 'Pause' : 'Play');
+        this.updateView();
+    }
+
+    loadTrack(track) {
+        this.track = track;
+        this.setPosition(track.positionMs);
+        this.seekSettleUntil = 0;
+
+        this.el.trackTitle.textContent = track.name;
+        this.el.trackArtist.textContent = track.artists;
+        this.el.albumArt.style.backgroundImage = track.art ? `url("${track.art}")` : '';
+        this.applyAlbumColor(track.art);
+
         this.lyrics = [];
-        
-        if (!this.isVinylMode) {
-            this.statusEl.textContent = `🎵 ${trackData.artist} - ${trackData.track_name}`;
-        }
-        this.progressContainer.style.display = 'block';
-        
-        if (this.isVinylMode) {
-            this.showVinylTrackInfo(trackData);
-        }
-        
-        // Fetch lyrics and display immediately when received
-        this.fetchLyrics(trackData);
+        this.lyricIndex = -1;
+        this.el.lyricsLines.innerHTML = '';
+
+        // Each new record starts on its cover, then moves to lyrics
+        this.introUntil = performance.now() + ART_INTRO_MS;
+        clearTimeout(this.introTimer);
+        this.introTimer = setTimeout(() => this.updateView(), ART_INTRO_MS);
+
+        this.fetchLyrics(track);
+        this.highlightPlayingRows();
     }
-    
-    async fetchLyrics(trackData) {
+
+    clearTrack() {
+        if (!this.track) return;
+        this.track = null;
+        this.isPlaying = false;
+        this.lyrics = [];
+        this.el.lyricsLines.innerHTML = '';
+        this.el.player.classList.remove('is-playing');
+        this.updateView();
+    }
+
+    setPosition(ms) {
+        this.positionMs = ms;
+        this.positionAt = performance.now();
+    }
+
+    currentPositionMs(now = performance.now()) {
+        if (this.drag) return this.drag.positionMs;
+        const position = this.isPlaying ? this.positionMs + (now - this.positionAt) : this.positionMs;
+        return this.track ? clamp(position, 0, this.track.durationMs) : position;
+    }
+
+    // ---------- Rendering ----------
+
+    frame(now) {
+        if (this.lastFrameTime !== null && this.isPlaying && !this.drag && !reducedMotion.matches) {
+            this.rotation = (this.rotation + (now - this.lastFrameTime) * SPIN_DEGREES_PER_MS) % 360;
+        }
+        this.lastFrameTime = now;
+        this.el.albumArt.style.transform = `rotate(${this.rotation}deg)`;
+
+        if (this.track && this.track.durationMs > 0) {
+            const position = this.currentPositionMs(now);
+            this.renderProgress(position / this.track.durationMs);
+            this.syncLyric(position);
+        }
+        requestAnimationFrame(next => this.frame(next));
+    }
+
+    renderProgress(fraction) {
+        const f = clamp(fraction, 0, 1);
+        this.el.progressFill.style.strokeDashoffset = RING_CIRCUMFERENCE * (1 - f);
+        if (this.drag) {
+            const angle = f * 2 * Math.PI;
+            this.el.progressKnob.setAttribute('cx', 540 + RING_RADIUS * Math.sin(angle));
+            this.el.progressKnob.setAttribute('cy', 540 - RING_RADIUS * Math.cos(angle));
+        }
+    }
+
+    updateView() {
+        let view = 'art';
+        if (!this.track) {
+            view = 'idle';
+        } else if (this.showLyrics && this.isPlaying && this.lyrics.length > 0 && performance.now() >= this.introUntil) {
+            view = 'lyrics';
+        }
+        if (view === this.view) return;
+        this.view = view;
+        this.el.player.dataset.view = view;
+        if (view === 'lyrics') {
+            this.renderLyricPosition(true);
+        }
+    }
+
+    // ---------- Lyrics ----------
+
+    async fetchLyrics(track) {
         try {
-            console.log('Fetching lyrics for:', trackData.track_name, 'by', trackData.artist);
-            const params = new URLSearchParams({ track: trackData.track_name, artist: trackData.artist });
-            if (trackData.duration_ms) {
-                params.set('duration_ms', trackData.duration_ms);
+            const params = new URLSearchParams({ track: track.name, artist: track.artist });
+            if (track.durationMs) {
+                params.set('duration_ms', track.durationMs);
             }
             const response = await fetch(`/lyrics?${params}`);
             const data = await response.json();
-            
-            console.log('Lyrics response:', data);
-            
-            // Check if track hasn't changed while fetching (race condition protection)
-            if (this.currentTrack && 
-                this.currentTrack.track_name === trackData.track_name && 
-                this.currentTrack.artist === trackData.artist) {
-            
-            if (data.lines && data.lines.length > 0) {
-                this.lyrics = data.lines;
-                    console.log(`Loaded ${this.lyrics.length} lyric lines`);
-                    
-                    // Immediately render lyrics as soon as they arrive
-                this.renderLyrics();
-                
-                    // If in vinyl mode and showing lyrics, update immediately
-                    if (this.isVinylMode && this.vinylState === 'lyrics') {
-                        this.updateVinylLyrics();
-                    }
-                    
-                    // If in vinyl mode showing track info, transition to lyrics after delay
-                    if (this.isVinylMode && this.vinylState === 'track-info') {
-                    this.scheduleLyricsTransition(5000);
-                }
-            } else {
-                    console.log('No lyrics found for this track');
-                    if (!this.isVinylMode && this.statusEl) {
-                        this.statusEl.textContent = `🎵 ${trackData.artist} - ${trackData.track_name} (No lyrics available)`;
-                    }
-                }
-            } else {
-                console.log('Track changed while fetching lyrics, ignoring response');
-            }
+
+            // The track may have changed while this was loading
+            if (this.track !== track) return;
+
+            this.lyrics = data.lines || [];
+            this.lyricIndex = -1;
+            this.el.lyricsLines.replaceChildren(...this.lyrics.map(line => {
+                const element = document.createElement('div');
+                element.className = 'lyric-line upcoming';
+                element.textContent = line.words;
+                return element;
+            }));
+            this.syncLyric(this.currentPositionMs());
+            this.renderLyricPosition(true);
+            this.updateView();
         } catch (error) {
             console.error('Lyrics error:', error);
-            if (!this.isVinylMode && this.statusEl) {
-                this.statusEl.textContent = `🎵 ${trackData.artist} - ${trackData.track_name} (Lyrics error)`;
-            }
         }
     }
-    
-    updateProgressBars(progress) {
-        if (this.progressFill) {
-            this.progressFill.style.width = `${progress * 100}%`;
-        }
-        
-        if (this.isVinylMode && this.progressRing) {
-            const offset = this.progressCircumference - (progress * this.progressCircumference);
-            this.progressRing.style.strokeDashoffset = offset;
-        }
-    }
-    
-    startSmoothProgress(duration) {
-        if (this.isDragging || this.justSeeked || this.smoothProgressInterval) return;
-        
-        // Ensure we have a valid duration
-        if (!duration || duration <= 0) return;
-        
-        this.smoothProgressInterval = setInterval(() => {
-            if (this.isDragging || this.justSeeked || !this.currentTrack) {
-                this.stopSmoothProgress();
-                return;
-            }
-            
-            // Verify we're still on the same track
-            if (this.currentTrack.duration_ms !== duration) {
-                this.stopSmoothProgress();
-                return;
-            }
-            
-            const timeSinceUpdate = Date.now() - this.lastUpdateTime;
-            const interpolatedPosition = this.actualCurrentPosition + timeSinceUpdate;
-            const interpolatedProgress = Math.min(1, Math.max(0, interpolatedPosition / duration));
-            this.updateProgressBars(interpolatedProgress);
-        }, 50);
-    }
-    
-    stopSmoothProgress() {
-        if (this.smoothProgressInterval) {
-            clearInterval(this.smoothProgressInterval);
-            this.smoothProgressInterval = null;
-        }
-    }
-    
-    findCurrentLyricIndex(currentTime) {
+
+    findLyricIndex(positionMs) {
         for (let i = this.lyrics.length - 1; i >= 0; i--) {
-            if (currentTime >= this.lyrics[i].startTimeMs) {
+            if (positionMs >= this.lyrics[i].startTimeMs) {
                 return i;
             }
         }
         return -1;
     }
-    
-    renderLyrics() {
-        this.lyricsContainer.innerHTML = '';
-        this.lyrics.forEach((lyric, index) => {
-            const element = document.createElement('div');
-            element.className = 'lyric-line';
-            element.textContent = lyric.words;
-            element.dataset.index = index;
-            this.lyricsContainer.appendChild(element);
-        });
-    }
-    
-    updateActiveLyric() {
-        const lyricElements = this.lyricsContainer.querySelectorAll('.lyric-line');
-        lyricElements.forEach((el, index) => {
-            el.classList.toggle('active', index === this.currentLyricIndex);
-        });
-        
-        if (this.currentLyricIndex >= 0 && !this.isVinylMode) {
-            const activeElement = lyricElements[this.currentLyricIndex];
-            if (activeElement) {
-                activeElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            }
-        }
-        
-        if (this.isVinylMode && this.vinylState === 'lyrics') {
-                this.updateVinylLyrics();
-        }
-    }
-    
-    clearLyrics() {
-        this.lyricsContainer.innerHTML = '';
-        this.lyrics = [];
-        this.currentLyricIndex = -1;
-    }
-    
-    clearVinylLyrics() {
-        // Immediately clear vinyl mode lyric displays
-        if (this.previousLyric) {
-            this.previousLyric.textContent = '';
-            this.previousLyric.classList.remove('visible');
-        }
-        if (this.currentLyric) {
-            this.currentLyric.textContent = '';
-            this.currentLyric.style.opacity = '1';
-        }
-        if (this.nextLyric) {
-            this.nextLyric.textContent = '';
-            this.nextLyric.classList.remove('visible');
-        }
-    }
-    
-    // VINYL MODE
-    toggleVinylMode() {
-        this.isVinylMode = !this.isVinylMode;
-        
-        if (this.isVinylMode) {
-            this.enterVinylMode();
-        } else {
-            this.exitVinylMode();
-        }
-        
-        this.vinylBtn.classList.toggle('active', this.isVinylMode);
-        this.vinylBtn.textContent = this.isVinylMode ? 'Exit Vinyl' : 'Vinyl Mode';
-    }
-    
-    enterVinylMode() {
-        document.body.classList.add('vinyl-active');
-        this.vinylMode.style.display = 'flex';
-        this.vinylState = 'idle';
-        
-        if (this.currentTrack) {
-            this.showVinylTrackInfo(this.currentTrack);
-            if (this.lyrics.length > 0) {
-                this.scheduleLyricsTransition(3000);
-            }
-        }
-    }
-    
-    exitVinylMode() {
-        document.body.classList.remove('vinyl-active');
-        this.vinylMode.style.display = 'none';
-        this.vinylState = 'idle';
-        this.hideBrowsing();
-    }
-    
-    showVinylTrackInfo(trackData) {
-        this.vinylState = 'track-info';
-        this.hideBrowsing();
-        
-        this.previousLyric.textContent = '';
-        this.currentLyric.textContent = '';
-        this.nextLyric.textContent = '';
-        this.previousLyric.classList.remove('visible');
-        this.nextLyric.classList.remove('visible');
-        
-        if (trackData.album_art) {
-            this.albumArt.style.backgroundImage = `url(${trackData.album_art})`;
-        }
-        
-        this.albumArt.classList.remove('blurred');
-        this.albumOverlay.classList.remove('visible');
-        
-        this.vinylArtist.textContent = trackData.track_name;
-        this.vinylTitle.textContent = trackData.artist;
-        
-        this.trackInfo.classList.add('visible');
-        this.lyricDisplay.classList.remove('visible');
-    }
-    
-    scheduleLyricsTransition(delayMs) {
-        clearTimeout(this.lyricsTransitionTimeout);
-        this.lyricsTransitionTimeout = setTimeout(() => this.transitionToVinylLyrics(), delayMs);
-    }
-    
-    transitionToVinylLyrics() {
-        if (this.vinylState !== 'track-info' || this.lyrics.length === 0) return;
-        // Lyric lines only advance during playback, so stay on the title while paused;
-        // resuming triggers this transition from handlePlayerStateChange
-        if (!this.isPlaying) return;
 
-        this.vinylState = 'lyrics';
-        this.albumArt.classList.add('blurred');
-        this.albumOverlay.classList.add('visible');
-        
-        // Hide pause timestamp when transitioning to lyrics
-        if (this.pauseTimestamp) {
-            this.pauseTimestamp.classList.remove('visible');
-        }
-        
-        this.trackInfo.classList.remove('visible');
-        this.lyricDisplay.classList.add('visible');
-        
-        // Before the first line, this shows it dimmed instead of leaving the circle empty
-        this.updateVinylLyrics();
-    }
-    
-    handlePause() {
-        this.lyricDisplay.classList.remove('visible');
-        this.trackInfo.classList.add('visible');
-        this.albumArt.classList.remove('blurred');
-        this.albumOverlay.classList.remove('visible');
-        this.vinylState = 'track-info';
-        
-        if (this.actualCurrentPosition > 0) {
-            this.pauseTimestamp.textContent = `⏸ ${this.formatTime(this.actualCurrentPosition)}`;
-            this.pauseTimestamp.classList.add('visible');
+    syncLyric(positionMs) {
+        if (this.lyrics.length === 0) return;
+        const index = this.findLyricIndex(positionMs);
+        if (index !== this.lyricIndex) {
+            this.lyricIndex = index;
+            this.renderLyricPosition();
         }
     }
-    
-    updateVinylLyrics() {
-        if (this.currentLyricIndex === -1 && this.lyrics.length > 0) {
-            this.previousLyric.textContent = '';
-            this.previousLyric.classList.remove('visible');
-            this.currentLyric.textContent = this.lyrics[0].words;
-            this.currentLyric.style.opacity = '0.4';
-            this.nextLyric.textContent = '';
-            this.nextLyric.classList.remove('visible');
+
+    // Colour past/current/upcoming lines and scroll the current one to the centre
+    renderLyricPosition(instant = false) {
+        const lines = this.el.lyricsLines.children;
+        if (lines.length === 0) return;
+        for (let i = 0; i < lines.length; i++) {
+            lines[i].className = `lyric-line ${i < this.lyricIndex ? 'past' : i === this.lyricIndex ? 'current' : 'upcoming'}`;
+        }
+        const focus = lines[Math.max(this.lyricIndex, 0)];
+        const centre = this.el.lyricsView.clientHeight * 0.47;
+        const offset = centre - (focus.offsetTop + focus.offsetHeight / 2);
+        this.el.lyricsLines.classList.toggle('instant', instant);
+        this.el.lyricsLines.style.transform = `translateY(${offset}px)`;
+    }
+
+    // ---------- Album colour ----------
+
+    applyAlbumColor(url) {
+        if (!url) {
+            this.setAlbumColor({ hue: 0, saturation: 0 });
             return;
         }
-        
-        if (this.currentLyricIndex > 0) {
-            this.previousLyric.textContent = this.lyrics[this.currentLyricIndex - 1].words;
-            this.previousLyric.classList.add('visible');
-        } else {
-            this.previousLyric.textContent = '';
-            this.previousLyric.classList.remove('visible');
-        }
-        
-        if (this.currentLyricIndex >= 0 && this.currentLyricIndex < this.lyrics.length) {
-            this.currentLyric.textContent = this.lyrics[this.currentLyricIndex].words;
-            this.currentLyric.style.opacity = '1';
-        } else {
-            this.currentLyric.textContent = '';
-        }
-        
-        if (this.currentLyricIndex >= 0 && this.currentLyricIndex < this.lyrics.length - 1) {
-            this.nextLyric.textContent = this.lyrics[this.currentLyricIndex + 1].words;
-            this.nextLyric.classList.add('visible');
-        } else {
-            this.nextLyric.textContent = '';
-            this.nextLyric.classList.remove('visible');
-        }
-    }
-    
-    // BROWSING
-    toggleNavMenu() {
-        if (this.navMenu.style.display === 'none' || !this.navMenu.style.display) {
-            this.navMenu.style.display = 'flex';
-        } else {
-            this.navMenu.style.display = 'none';
-        }
-    }
-    
-    async handleNavAction(action) {
-        this.navMenu.style.display = 'none';
-        
-        switch (action) {
-            case 'playlists':
-                await this.browsePlaylists();
-                break;
-            case 'albums':
-                await this.browseAlbums();
-                break;
-            case 'search':
-                this.openSearch();
-                break;
-            case 'recent':
-                await this.browseRecentlyPlayed();
-                break;
-        }
-    }
-    
-    async browsePlaylists() {
-        this.vinylState = 'browsing';
-        this.browsingState = 'playlists';
-        this.browsingHeader.textContent = 'Your Playlists';
-        this.showBrowsing();
-        this.browsingLoading.style.display = 'block';
-        
-        try {
-            const response = await fetch('/api/playlists?limit=50');
-            const data = await response.json();
-            
-            if (!response.ok) {
-                const errorMsg = data.error || `HTTP ${response.status}: ${response.statusText}`;
-                console.error('Playlists API error:', errorMsg, data);
-                throw new Error(errorMsg);
-            }
-            
-            if (data.error) {
-                console.error('Playlists API returned error:', data.error);
-                throw new Error(data.error);
-            }
-            
-            if (!data.items) {
-                console.warn('Playlists API returned unexpected format:', data);
-                throw new Error('Unexpected response format');
-            }
-            
-            this.browsingData = data.items || [];
-            
-            if (this.browsingData.length === 0) {
-                this.browsingItems.innerHTML = '<div class="browsing-error">No playlists found. Create a playlist in Spotify first.</div>';
-            } else {
-                this.renderBrowsingItems();
-            }
-        } catch (error) {
-            console.error('Error loading playlists:', error);
-            let errorMsg = error.message || 'Failed to load playlists';
-            
-            // Provide helpful error messages
-            if (errorMsg.includes('401') || errorMsg.includes('Unauthorized')) {
-                errorMsg = 'Authentication required. Please refresh the page and re-authenticate with Spotify.';
-            } else if (errorMsg.includes('403') || errorMsg.includes('Forbidden')) {
-                errorMsg = 'Permission denied. Please re-authenticate with Spotify to grant playlist access.';
-            } else if (errorMsg.includes('Spotify not connected')) {
-                errorMsg = 'Spotify not connected. Please refresh the page and authenticate.';
-            }
-            
-            this.browsingItems.innerHTML = `<div class="browsing-error">${escapeHtml(errorMsg)}<br><small>Check browser console (F12) for details.</small></div>`;
-        } finally {
-            this.browsingLoading.style.display = 'none';
-        }
-    }
-    
-    async browseAlbums() {
-        this.vinylState = 'browsing';
-        this.browsingState = 'albums';
-        this.browsingHeader.textContent = 'Your Albums';
-        this.showBrowsing();
-        this.browsingLoading.style.display = 'block';
-        
-        try {
-            const response = await fetch('/api/albums?limit=50');
-            const data = await response.json();
-            
-            if (!response.ok || data.error) {
-                throw new Error(data.error || `HTTP ${response.status}`);
-            }
-            
-            this.browsingData = data.items || [];
-            this.renderBrowsingItems();
-        } catch (error) {
-            console.error('Error loading albums:', error);
-            const errorMsg = error.message || 'Failed to load albums';
-            this.browsingItems.innerHTML = `<div class="browsing-error">${escapeHtml(errorMsg)}</div>`;
-        } finally {
-            this.browsingLoading.style.display = 'none';
-        }
-    }
-    
-    async browseRecentlyPlayed() {
-        this.vinylState = 'browsing';
-        this.browsingState = 'tracks';
-        this.browsingHeader.textContent = 'Recently Played';
-        this.showBrowsing();
-        this.browsingLoading.style.display = 'block';
-        
-        try {
-            const response = await fetch('/api/recently-played?limit=50');
-            const data = await response.json();
-            
-            if (!response.ok || data.error) {
-                throw new Error(data.error || `HTTP ${response.status}`);
-            }
-            
-            this.browsingData = data.items || [];
-            this.renderBrowsingItems();
-        } catch (error) {
-            console.error('Error loading recently played:', error);
-            const errorMsg = error.message || 'Failed to load recently played';
-            this.browsingItems.innerHTML = `<div class="browsing-error">${escapeHtml(errorMsg)}</div>`;
-        } finally {
-            this.browsingLoading.style.display = 'none';
-        }
-    }
-    
-    renderBrowsingItems() {
-        this.browsingItems.innerHTML = '';
-        this.selectedIndex = 0;
-        
-        if (!this.browsingData || this.browsingData.length === 0) {
-            this.browsingItems.innerHTML = '<div class="browsing-error">No items to display</div>';
-            return;
-        }
-        
-        this.browsingData.forEach((item, index) => {
-            if (!item) return; // Skip null items
-            
-            const element = document.createElement('div');
-            element.className = 'browsing-item';
-            if (index === 0) element.classList.add('selected');
-            
-            if (this.browsingState === 'playlists') {
-                // Safe image URL extraction
-                let imageUrl = '';
-                if (item.images && Array.isArray(item.images) && item.images.length > 0 && item.images[0]) {
-                    imageUrl = item.images[0].url || '';
-                }
-                element.innerHTML = `
-                    <div class="browsing-item-art" style="background-image: url('${escapeHtml(imageUrl)}')"></div>
-                    <div class="browsing-item-info">
-                        <div class="browsing-item-name">${escapeHtml(item.name || 'Unknown Playlist')}</div>
-                        <div class="browsing-item-meta">${item.tracks?.total || 0} tracks</div>
-                    </div>
-                `;
-                element.addEventListener('click', () => this.playPlaylistShuffled(item.id));
-            } else if (this.browsingState === 'albums') {
-                // Safe image URL extraction
-                let imageUrl = '';
-                if (item.images && Array.isArray(item.images) && item.images.length > 0 && item.images[0]) {
-                    imageUrl = item.images[0].url || '';
-                }
-                element.innerHTML = `
-                    <div class="browsing-item-art" style="background-image: url('${escapeHtml(imageUrl)}')"></div>
-                    <div class="browsing-item-info">
-                        <div class="browsing-item-name">${escapeHtml(item.name || 'Unknown Album')}</div>
-                        <div class="browsing-item-meta">${escapeHtml(item.artists?.[0]?.name || 'Unknown Artist')}</div>
-                    </div>
-                `;
-                element.addEventListener('click', () => this.playAlbum(item.id));
-            } else if (this.browsingState === 'tracks') {
-                // Handle track items - check for proper structure
-                const trackName = item.name || 'Unknown Track';
-                const artistName = (item.artists && item.artists.length > 0 && item.artists[0]?.name) ? item.artists[0].name : 'Unknown Artist';
-                const imageUrl = (item.album?.images && item.album.images.length > 0 && item.album.images[0]?.url) ? item.album.images[0].url : '';
-                const trackId = item.id;
-                
-                console.log('Rendering track:', { trackName, artistName, trackId, item });
-                
-                if (!trackId) {
-                    console.warn('Track has no ID:', item);
-                }
-                
-                element.innerHTML = `
-                    <div class="browsing-item-art" style="background-image: url('${escapeHtml(imageUrl)}')"></div>
-                    <div class="browsing-item-info">
-                        <div class="browsing-item-name">${escapeHtml(trackName)}</div>
-                        <div class="browsing-item-meta">${escapeHtml(artistName)}</div>
-                    </div>
-                `;
-                
-                if (trackId) {
-                    element.addEventListener('click', () => this.playTrack(trackId));
-                } else {
-                    element.style.opacity = '0.5';
-                    element.style.cursor = 'not-allowed';
-                    console.warn('Track has no ID, cannot play:', item);
-                }
-            }
-            
-            this.browsingItems.appendChild(element);
-        });
-    }
-    
-    showBrowsing() {
-        this.trackInfo.classList.remove('visible');
-        this.lyricDisplay.classList.remove('visible');
-        this.browsingDisplay.style.display = 'flex';
-        this.backBtn.style.display = 'block';
-        // Add class to disable pointer events on vinyl circle
-        this.vinylMode.classList.add('browsing-active');
-    }
-    
-    hideBrowsing() {
-        this.browsingDisplay.style.display = 'none';
-        this.backBtn.style.display = 'none';
-        this.browsingData = [];
-        // Remove class to re-enable pointer events on vinyl circle
-        this.vinylMode.classList.remove('browsing-active');
-    }
-    
-    goBack() {
-        this.hideBrowsing();
-        this.vinylState = 'track-info';
-        if (this.currentTrack) {
-            this.showVinylTrackInfo(this.currentTrack);
-        }
-    }
-    
-    // SEARCH
-    openSearch() {
-        this.searchModal.style.display = 'flex';
-        this.searchInput.focus();
-    }
-    
-    closeSearch() {
-        this.searchModal.style.display = 'none';
-        this.searchInput.value = '';
-        this.searchResults.innerHTML = '';
-    }
-    
-    handleSearchInput(e) {
-        const query = e.target.value.trim();
-        if (query.length > 2) {
-            clearTimeout(this.searchTimeout);
-            this.searchTimeout = setTimeout(() => this.performSearch(query), 500);
-        }
-    }
-    
-    async performSearch(query) {
-        if (!query) return;
-        
-        this.searchResults.innerHTML = '<div class="search-loading">Searching...</div>';
-        
-        try {
-            const response = await fetch(`/api/search?q=${encodeURIComponent(query)}&type=track&limit=20`);
-            const data = await response.json();
-            
-            this.searchResults.innerHTML = '';
-            
-            if (data.tracks?.items?.length > 0) {
-                data.tracks.items.forEach(track => {
-                    if (!track || !track.id || !track.name) return; // Skip invalid tracks
-                    
-                    const element = document.createElement('div');
-                    element.className = 'search-result-item';
-                    
-                    // Safe image URL extraction
-                    let imageUrl = '';
-                    if (track.album?.images && Array.isArray(track.album.images) && track.album.images.length > 0 && track.album.images[0]) {
-                        imageUrl = track.album.images[0].url || '';
-                    }
-                    
-                    const artistName = (track.artists && track.artists.length > 0 && track.artists[0]?.name) ? track.artists[0].name : 'Unknown Artist';
-                    
-                    element.innerHTML = `
-                        <div class="search-result-art" style="background-image: url('${escapeHtml(imageUrl)}')"></div>
-                        <div class="search-result-info">
-                            <div class="search-result-name">${escapeHtml(track.name)}</div>
-                            <div class="search-result-artist">${escapeHtml(artistName)}</div>
-                        </div>
-                    `;
-                    element.addEventListener('click', () => {
-                        this.playTrack(track.id);
-                        this.closeSearch();
-                    });
-                    this.searchResults.appendChild(element);
-                });
-            } else {
-                this.searchResults.innerHTML = '<div class="search-no-results">No results found</div>';
-            }
-        } catch (error) {
-            console.error('Search error:', error);
-            this.searchResults.innerHTML = '<div class="search-error">Search failed</div>';
-        }
-    }
-    
-    // PLAYBACK CONTROLS
-    async playPause() {
-        if (this.player && this.isSDKReady) {
-            await this.player.togglePlay();
-        } else {
+        const image = new Image();
+        image.crossOrigin = 'anonymous';
+        image.onload = () => {
+            if (this.track?.art !== url) return;
             try {
-                const response = await fetch('/play-pause', { method: 'POST' });
-                const data = await response.json();
-                this.playPauseBtn.textContent = data.action === 'paused' ? '▶' : '⏸';
-        } catch (error) {
-            console.error('Play/pause error:', error);
+                this.setAlbumColor(coverHueSaturation(image));
+            } catch (error) {
+                this.setAlbumColor({ hue: 0, saturation: 0 });
             }
-        }
+        };
+        image.onerror = () => this.setAlbumColor({ hue: 0, saturation: 0 });
+        image.src = url;
     }
-    
-    async nextTrack() {
-        if (this.player && this.isSDKReady) {
-            await this.player.nextTrack();
-        } else {
-        try {
-            await fetch('/next-track', { method: 'POST' });
-        } catch (error) {
-            console.error('Next track error:', error);
-            }
-        }
+
+    setAlbumColor({ hue, saturation }) {
+        // Fixed lightness keeps white and dark lyric lines readable on any cover
+        const s = saturation < 0.08 ? 0 : clamp(saturation * 100, 30, 70);
+        this.el.player.style.setProperty('--album', `hsl(${hue.toFixed(0)} ${s.toFixed(0)}% 34%)`);
+        this.el.player.style.setProperty('--album-deep', `hsl(${hue.toFixed(0)} ${s.toFixed(0)}% 16%)`);
     }
-    
-    async previousTrack() {
-        if (this.player && this.isSDKReady) {
-            await this.player.previousTrack();
-        } else {
-        try {
-            await fetch('/previous-track', { method: 'POST' });
-        } catch (error) {
-            console.error('Previous track error:', error);
-            }
-        }
-    }
-    
-    async playTrack(trackId) {
-        try {
-            await fetch('/api/play', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ type: 'track', id: trackId })
-            });
-            
-            this.hideBrowsing();
-            this.vinylState = 'track-info';
-        } catch (error) {
-            console.error('Play track error:', error);
-        }
-    }
-    
-    async playAlbum(albumId) {
-        try {
-            await fetch('/api/play', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ type: 'album', id: albumId })
-            });
-            this.hideBrowsing();
-            this.vinylState = 'track-info';
-        } catch (error) {
-            console.error('Play album error:', error);
-        }
-    }
-    
-    async playPlaylistShuffled(playlistId) {
-        try {
-            // First enable shuffle
-            await fetch('/api/shuffle', {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ state: true })
-            });
-            
-            // Then play the playlist
-            await fetch('/api/play', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ type: 'playlist', id: playlistId })
-            });
-            
-            this.hideBrowsing();
-            this.vinylState = 'track-info';
-            console.log('Playing playlist with shuffle:', playlistId);
-        } catch (error) {
-            console.error('Play playlist shuffled error:', error);
-        }
-    }
-    
-    // GESTURES
+
+    // ---------- Record gestures ----------
+
     handlePointerDown(e) {
-        if (!this.isVinylMode || !this.currentTrack || this.vinylState === 'browsing') return;
-        if (this.isDragging || e.button !== 0) return;
+        if (!this.track || this.isLibraryOpen() || this.drag || e.button !== 0) return;
         e.preventDefault();
         // Keep receiving moves and the release even if the pointer leaves the circle
-        this.vinylCircle.setPointerCapture(e.pointerId);
-        this.activePointerId = e.pointerId;
-        this.startGesture(e.clientX, e.clientY);
-    }
-    
-    handlePointerMove(e) {
-        if (!this.isDragging || e.pointerId !== this.activePointerId) return;
-        e.preventDefault();
-        this.updateGesture(e.clientX, e.clientY);
-    }
-    
-    handlePointerUp(e) {
-        if (!this.isDragging || e.pointerId !== this.activePointerId) return;
-        e.preventDefault();
-        this.activePointerId = null;
-        this.endGesture();
-    }
-    
-    startGesture(x, y) {
-        this.isDragging = true;
-        this.totalAngleChange = 0;
-        this.stopSmoothProgress();
-        this.gestureStartPosition = this.actualCurrentPosition;
-        
-        const rect = this.vinylCircle.getBoundingClientRect();
-        this.centerX = rect.left + rect.width / 2;
-        this.centerY = rect.top + rect.height / 2;
-        this.lastAngle = this.getAngle(x, y);
-        
-        this.seekTimestamp.classList.add('visible');
-        this.albumArt.classList.add('seeking');
-        this.albumOverlay.classList.remove('visible');
-    }
-    
-    updateGesture(x, y) {
-        const currentAngle = this.getAngle(x, y);
-        let angleDiff = currentAngle - this.lastAngle;
-        if (angleDiff > 180) angleDiff -= 360;
-        if (angleDiff < -180) angleDiff += 360;
-        
-        this.totalAngleChange += angleDiff;
-        this.rotation += angleDiff;
-        this.lastAngle = currentAngle;
-        
-        const seekPerDegree = 30000 / 360;
-        const seekAmount = this.totalAngleChange * seekPerDegree;
-        
-        if (this.currentTrack) {
-            this.seekPosition = Math.max(0, Math.min(this.currentTrack.duration_ms, this.gestureStartPosition + seekAmount));
-            this.actualCurrentPosition = this.seekPosition;
-            const progress = this.seekPosition / this.currentTrack.duration_ms;
-            this.updateProgressBars(progress);
-            this.seekTimestamp.textContent = this.formatTime(this.seekPosition);
-            
-            if (this.vinylState === 'lyrics' && this.lyrics.length > 0) {
-                const seekLyricIndex = this.findCurrentLyricIndex(this.seekPosition);
-                if (seekLyricIndex >= 0) {
-                    this.currentLyricIndex = seekLyricIndex;
-                    this.updateVinylLyrics();
-                }
-            }
-        }
-    }
-    
-    async endGesture() {
-        this.isDragging = false;
-        this.seekTimestamp.classList.remove('visible');
-        this.albumArt.classList.remove('seeking');
-        
-        if (this.vinylState === 'lyrics') {
-            this.albumOverlay.classList.add('visible');
-        }
-        
-        if (Math.abs(this.seekPosition - this.gestureStartPosition) > 500 && this.currentTrack) {
-            try {
-                // Immediately update progress bar to show the seek position
-                const seekProgress = Math.min(1, Math.max(0, this.seekPosition / this.currentTrack.duration_ms));
-                this.updateProgressBars(seekProgress);
-                this.actualCurrentPosition = this.seekPosition;
-                this.lastUpdateTime = Date.now();
-                
-                // Stop smooth progress before seeking
-                this.stopSmoothProgress();
-                
-                // Perform the seek
-                if (this.player && this.isSDKReady) {
-                    await this.player.seek(this.seekPosition);
-                } else {
-                await fetch('/seek', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ position_ms: Math.floor(this.seekPosition) })
-                });
-                }
-                
-                // Set flag to prevent immediate updates from overwriting our seek
-                this.justSeeked = true;
-                
-                // Set timeout as fallback - SDK state update should clear justSeeked earlier
-                setTimeout(() => {
-                    if (this.justSeeked) {
-                        console.log('Seek timeout - forcing resume');
-                    this.actualCurrentPosition = this.seekPosition;
-                    this.lastUpdateTime = Date.now();
-                    this.justSeeked = false;
-                        
-                        // Update progress bar one more time
-                        if (this.currentTrack) {
-                            const progress = Math.min(1, Math.max(0, this.seekPosition / this.currentTrack.duration_ms));
-                            this.updateProgressBars(progress);
-                        }
-                        
-                        // Restart smooth progress if playing
-                        if (this.currentTrack && !this.isDragging && this.player) {
-                            this.player.getCurrentState().then(state => {
-                                if (state && !state.paused) {
-                                    this.startSmoothProgress(this.currentTrack.duration_ms);
-                                }
-                            }).catch(() => {
-                                // Fallback: restart anyway if we can't check state
-                                this.startSmoothProgress(this.currentTrack.duration_ms);
-                            });
-                        }
-                    }
-                }, 2000);
-            } catch (error) {
-                console.error('Seek error:', error);
-                // On error, clear justSeeked and restart progress
-                this.justSeeked = false;
-                if (this.currentTrack) {
-                    const progress = Math.min(1, Math.max(0, this.seekPosition / this.currentTrack.duration_ms));
-                    this.updateProgressBars(progress);
-                    this.startSmoothProgress(this.currentTrack.duration_ms);
-                }
-            }
-        } else {
-            // No significant seek - just reset
-            this.justSeeked = false;
-        }
-    }
-    
-    getAngle(x, y) {
-        const dx = x - this.centerX;
-        const dy = y - this.centerY;
-        return Math.atan2(dy, dx) * (180 / Math.PI);
-    }
-    
-    startSpinLoop() {
-        const tick = (now) => {
-            if (this.lastFrameTime !== null && this.isPlaying && !this.isDragging) {
-                this.rotation = (this.rotation + (now - this.lastFrameTime) * SPIN_DEGREES_PER_MS) % 360;
-            }
-            this.lastFrameTime = now;
-            this.albumArt.style.transform = `rotate(${this.rotation}deg)`;
-            requestAnimationFrame(tick);
+        this.el.disc.setPointerCapture(e.pointerId);
+
+        const rect = this.el.disc.getBoundingClientRect();
+        const centerX = rect.left + rect.width / 2;
+        const centerY = rect.top + rect.height / 2;
+        const startPositionMs = this.currentPositionMs();
+        this.drag = {
+            pointerId: e.pointerId,
+            centerX,
+            centerY,
+            lastAngle: Math.atan2(e.clientY - centerY, e.clientX - centerX) * 180 / Math.PI,
+            totalDegrees: 0,
+            startPositionMs,
+            positionMs: startPositionMs,
+            seeking: false
         };
-        requestAnimationFrame(tick);
     }
-    
-    formatTime(ms) {
-        const minutes = Math.floor(ms / 60000);
-        const seconds = Math.floor((ms % 60000) / 1000);
-        return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+
+    handlePointerMove(e) {
+        const drag = this.drag;
+        if (!drag || e.pointerId !== drag.pointerId) return;
+        e.preventDefault();
+
+        const angle = Math.atan2(e.clientY - drag.centerY, e.clientX - drag.centerX) * 180 / Math.PI;
+        let delta = angle - drag.lastAngle;
+        if (delta > 180) delta -= 360;
+        if (delta < -180) delta += 360;
+        drag.lastAngle = angle;
+        drag.totalDegrees += delta;
+        this.rotation += delta;
+
+        if (!drag.seeking && Math.abs(drag.totalDegrees) >= TAP_MAX_DEGREES) {
+            drag.seeking = true;
+            this.el.seekTotal.textContent = `/ ${formatTime(this.track.durationMs)}`;
+            this.el.player.classList.add('is-seeking');
+        }
+        drag.positionMs = clamp(drag.startPositionMs + drag.totalDegrees * SEEK_MS_PER_DEGREE, 0, this.track.durationMs);
+        this.el.seekTime.textContent = formatTime(drag.positionMs);
+    }
+
+    handlePointerUp(e) {
+        const drag = this.drag;
+        if (!drag || e.pointerId !== drag.pointerId) return;
+        e.preventDefault();
+        this.drag = null;
+        this.el.player.classList.remove('is-seeking');
+
+        if (!drag.seeking) {
+            if (e.type === 'pointerup') this.handleTap();
+            return;
+        }
+        if (Math.abs(drag.positionMs - drag.startPositionMs) >= MIN_SEEK_MS) {
+            this.seekTo(drag.positionMs);
+        }
+    }
+
+    // Tap a stopped record to start it; tap a spinning one to switch between cover and lyrics
+    handleTap() {
+        if (!this.isPlaying) {
+            this.playPause();
+            return;
+        }
+        if (this.lyrics.length === 0) {
+            this.showToast('No lyrics for this song');
+            return;
+        }
+        this.showLyrics = this.view !== 'lyrics';
+        this.introUntil = 0;
+        this.updateView();
+    }
+
+    // ---------- Playback controls ----------
+
+    async seekTo(positionMs) {
+        const ms = Math.floor(positionMs);
+        this.setPosition(ms);
+        this.seekTarget = ms;
+        this.seekSettleUntil = performance.now() + SEEK_SETTLE_MS;
+        try {
+            // The SDK only controls playback that's on this device
+            if (this.isSDKReady && await this.player.getCurrentState()) {
+                await this.player.seek(ms);
+            } else {
+                await this.postJson('/seek', { position_ms: ms });
+            }
+        } catch (error) {
+            console.error('Seek error:', error);
+            this.showToast("Couldn't skip to that point");
+        }
+    }
+
+    async playPause() {
+        if (!this.track) return;
+        try {
+            if (this.isSDKReady && await this.player.getCurrentState()) {
+                await this.player.togglePlay();
+            } else {
+                const data = await this.postJson('/play-pause');
+                this.setPosition(this.currentPositionMs());
+                this.isPlaying = data.action === 'playing';
+                this.el.player.classList.toggle('is-playing', this.isPlaying);
+                this.updateView();
+            }
+        } catch (error) {
+            console.error('Play/pause error:', error);
+            this.showToast("Couldn't reach Spotify");
+        }
+    }
+
+    async nextTrack() {
+        try {
+            if (this.isSDKReady && await this.player.getCurrentState()) {
+                await this.player.nextTrack();
+            } else {
+                await this.postJson('/next-track');
+            }
+        } catch (error) {
+            console.error('Next track error:', error);
+            this.showToast("Couldn't skip");
+        }
+    }
+
+    async previousTrack() {
+        try {
+            if (this.isSDKReady && await this.player.getCurrentState()) {
+                await this.player.previousTrack();
+            } else {
+                await this.postJson('/previous-track');
+            }
+        } catch (error) {
+            console.error('Previous track error:', error);
+            this.showToast("Couldn't go back");
+        }
+    }
+
+    // POST/PUT JSON; throws on network errors and on {error} responses from the server
+    async postJson(url, body, method = 'POST') {
+        const response = await fetch(url, {
+            method,
+            headers: { 'Content-Type': 'application/json' },
+            body: body === undefined ? undefined : JSON.stringify(body)
+        });
+        const data = await response.json();
+        if (!response.ok || data.error) {
+            throw new Error(data.error || `HTTP ${response.status}`);
+        }
+        return data;
+    }
+
+    async play(item) {
+        // Play on this device when it's connected, otherwise on whichever device is active
+        const deviceId = this.isSDKReady ? this.deviceId : undefined;
+        try {
+            if (item.kind === 'playlist') {
+                // Playlists start shuffled; if shuffle fails, still play
+                await this.postJson('/api/shuffle', { state: true, device_id: deviceId }, 'PUT')
+                    .catch(error => console.warn('Shuffle failed:', error));
+            }
+            await this.postJson('/api/play', { type: item.kind, id: item.id, device_id: deviceId });
+            this.showLyrics = true;
+            this.closeLibrary();
+        } catch (error) {
+            console.error('Play error:', error);
+            this.showToast(/NO_ACTIVE_DEVICE|No active device/i.test(error.message)
+                ? 'Open Spotify on a device first'
+                : "Couldn't play that");
+        }
+    }
+
+    // ---------- Library ----------
+
+    isLibraryOpen() {
+        return this.el.player.classList.contains('library-open');
+    }
+
+    toggleLibrary() {
+        if (this.isLibraryOpen()) {
+            this.closeLibrary();
+        } else {
+            this.openLibrary();
+        }
+    }
+
+    openLibrary() {
+        this.el.player.classList.add('library-open');
+        this.el.library.setAttribute('aria-hidden', 'false');
+        this.el.libraryBtn.setAttribute('aria-label', 'Close library');
+        this.el.searchInput.value = '';
+        this.loadLibraryTab(this.libraryTab);
+    }
+
+    closeLibrary() {
+        this.el.player.classList.remove('library-open');
+        this.el.library.setAttribute('aria-hidden', 'true');
+        this.el.libraryBtn.setAttribute('aria-label', 'Open library');
+        this.el.searchInput.blur();
+        clearTimeout(this.searchTimer);
+    }
+
+    loadLibraryTab(tab) {
+        this.libraryTab = tab;
+        this.setActiveChip(tab);
+        const source = LIBRARY_SOURCES[tab];
+        this.loadList(source.url, data => data.items, source.kind);
+    }
+
+    setActiveChip(tab) {
+        this.el.chips.forEach(chip => {
+            const active = chip.dataset.tab === tab;
+            chip.classList.toggle('active', active);
+            chip.setAttribute('aria-selected', String(active));
+        });
+    }
+
+    handleSearchInput() {
+        clearTimeout(this.searchTimer);
+        const query = this.el.searchInput.value.trim();
+        this.searchTimer = setTimeout(() => {
+            if (query.length < 2) {
+                this.loadLibraryTab(this.libraryTab);
+                return;
+            }
+            this.setActiveChip(null);
+            const params = new URLSearchParams({ q: query, type: 'track', limit: 20 });
+            this.loadList(`/api/search?${params}`, data => data.tracks?.items, 'track', 'No results');
+        }, 300);
+    }
+
+    async loadList(url, pickItems, kind, emptyMessage = 'Nothing here yet') {
+        const request = ++this.libraryRequest;
+        this.renderSkeleton();
+        try {
+            const response = await fetch(url);
+            const data = await response.json();
+            if (!response.ok || data.error) {
+                throw new Error(data.error || `HTTP ${response.status}`);
+            }
+            // A newer tab or search replaced this one while it loaded
+            if (request !== this.libraryRequest) return;
+
+            const seen = new Set();
+            const items = (pickItems(data) || []).filter(item => {
+                // Recently played repeats songs; show each once
+                if (!item?.id || seen.has(item.id)) return false;
+                seen.add(item.id);
+                return true;
+            });
+            this.renderList(items, kind, emptyMessage);
+        } catch (error) {
+            console.error('Library error:', error);
+            if (request === this.libraryRequest) {
+                this.renderListMessage("Couldn't load your library. Check your connection and try again.");
+            }
+        }
+    }
+
+    renderSkeleton() {
+        this.el.libraryList.innerHTML = Array.from({ length: 6 }, () => `
+            <div class="row skeleton"><span class="row-art"></span><span class="row-text"><span class="row-title"></span><span class="row-meta"></span></span></div>
+        `).join('');
+    }
+
+    renderListMessage(message) {
+        this.el.libraryList.innerHTML = `<div class="list-message">${escapeHtml(message)}</div>`;
+    }
+
+    renderList(items, kind, emptyMessage) {
+        if (items.length === 0) {
+            this.renderListMessage(emptyMessage);
+            return;
+        }
+        this.el.libraryList.replaceChildren(...items.map(item => {
+            const { art, meta } = this.describeItem(item, kind);
+            const row = document.createElement('button');
+            row.type = 'button';
+            row.className = 'row';
+            row.dataset.uri = item.uri || '';
+            row.innerHTML = `
+                <span class="row-art" style="background-image: url('${escapeHtml(art)}')"></span>
+                <span class="row-text">
+                    <span class="row-title">${escapeHtml(item.name)}</span>
+                    <span class="row-meta">${escapeHtml(meta)}</span>
+                </span>
+            `;
+            row.addEventListener('click', () => this.play({ kind, id: item.id }));
+            return row;
+        }));
+        this.highlightPlayingRows();
+        this.el.libraryList.scrollTop = 0;
+    }
+
+    describeItem(item, kind) {
+        const artists = (item.artists || []).map(artist => artist.name).join(', ');
+        if (kind === 'playlist') {
+            const owner = item.owner?.display_name;
+            return { art: smallImage(item.images), meta: owner ? `Playlist · ${owner}` : 'Playlist' };
+        }
+        if (kind === 'album') {
+            return { art: smallImage(item.images), meta: `Album · ${artists}` };
+        }
+        return { art: smallImage(item.album?.images), meta: artists };
+    }
+
+    highlightPlayingRows() {
+        const playing = [this.track?.uri, this.track?.contextUri].filter(Boolean);
+        this.el.libraryList.querySelectorAll('.row[data-uri]').forEach(row => {
+            row.classList.toggle('playing', playing.includes(row.dataset.uri));
+        });
+    }
+
+    // ---------- Feedback & keyboard ----------
+
+    showToast(message) {
+        this.el.toast.textContent = message;
+        this.el.toast.classList.add('visible');
+        clearTimeout(this.toastTimer);
+        this.toastTimer = setTimeout(() => this.el.toast.classList.remove('visible'), TOAST_MS);
+    }
+
+    handleKeydown(e) {
+        if (e.key === 'Escape' && this.isLibraryOpen()) {
+            this.closeLibrary();
+            return;
+        }
+        const typing = e.target instanceof HTMLInputElement;
+        if (typing || e.target instanceof HTMLButtonElement) return;
+        if (e.key === ' ') {
+            e.preventDefault();
+            this.playPause();
+        } else if (e.key === 'ArrowRight' && this.track) {
+            this.seekTo(Math.min(this.currentPositionMs() + 10000, this.track.durationMs));
+        } else if (e.key === 'ArrowLeft' && this.track) {
+            this.seekTo(Math.max(this.currentPositionMs() - 10000, 0));
+        }
     }
 }
 
-// Initialize when DOM is ready
 document.addEventListener('DOMContentLoaded', () => {
-    new SpotifyPlayer();
+    new VinylPlayer();
 });
