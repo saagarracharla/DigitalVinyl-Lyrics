@@ -2,13 +2,23 @@
  * Full Spotify Player with Web Playback SDK
  * Circular screen optimized for 1080x1080
  */
+// Escape text from the Spotify API (playlist names are user-written) before putting it in innerHTML
+function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, ch => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    })[ch]);
+}
+
+// One full turn of the record every 20 seconds while playing
+const SPIN_DEGREES_PER_MS = 360 / 20000;
+
 class SpotifyPlayer {
     constructor() {
         // State
         this.currentTrack = null;
         this.lyrics = [];
         this.currentLyricIndex = -1;
-        this.isVinylMode = false;
+        this.isVinylMode = true;
         this.vinylState = 'idle'; // idle, track-info, lyrics, browsing
         this.browsingState = null; // playlists, albums, tracks, search
         this.browsingData = [];
@@ -17,8 +27,8 @@ class SpotifyPlayer {
         // Web Playback SDK
         this.player = null;
         this.deviceId = null;
-        this.accessToken = null;
         this.isSDKReady = false;
+        this.pollingInterval = null;
         
         // Progress tracking
         this.actualCurrentPosition = 0;
@@ -26,7 +36,14 @@ class SpotifyPlayer {
         this.smoothProgressInterval = null;
         this.lyricsUpdateInterval = null; // For continuous lyric updates
         this.isDragging = false;
+        this.activePointerId = null;
         this.justSeeked = false;
+        this.lyricsTransitionTimeout = null;
+        
+        // Record rotation, driven from JS so dragging continues from wherever the record is
+        this.isPlaying = false;
+        this.rotation = 0;
+        this.lastFrameTime = null;
         this.seekPosition = 0;
         this.gestureStartPosition = 0;
         this.totalAngleChange = 0;
@@ -36,6 +53,13 @@ class SpotifyPlayer {
         
         this.initializeElements();
         this.bindEvents();
+        this.startSpinLoop();
+        this.enterVinylMode(); // Start in vinyl mode by default
+        // Update button to reflect vinyl mode is active
+        if (this.vinylBtn) {
+            this.vinylBtn.classList.add('active');
+            this.vinylBtn.textContent = 'Exit Vinyl';
+        }
         this.initializeWebPlaybackSDK();
         
         console.log('🎵 Spotify Player initialized');
@@ -88,9 +112,6 @@ class SpotifyPlayer {
         this.searchInput = document.getElementById('searchInput');
         this.searchResults = document.getElementById('searchResults');
         
-        // Playback state
-        this.currentPlaylistId = null;
-        this.currentPlaylistTracks = [];
     }
     
     bindEvents() {
@@ -113,15 +134,11 @@ class SpotifyPlayer {
             });
         });
         
-        // Touch gestures
-        this.vinylCircle?.addEventListener('touchstart', (e) => this.handleTouchStart(e));
-        this.vinylCircle?.addEventListener('touchmove', (e) => this.handleTouchMove(e));
-        this.vinylCircle?.addEventListener('touchend', (e) => this.handleTouchEnd(e));
-        
-        // Mouse events (desktop)
-        this.vinylCircle?.addEventListener('mousedown', (e) => this.handleMouseStart(e));
-        this.vinylCircle?.addEventListener('mousemove', (e) => this.handleMouseMove(e));
-        this.vinylCircle?.addEventListener('mouseup', (e) => this.handleMouseEnd(e));
+        // Drag gestures: pointer events cover touch and mouse
+        this.vinylCircle?.addEventListener('pointerdown', (e) => this.handlePointerDown(e));
+        this.vinylCircle?.addEventListener('pointermove', (e) => this.handlePointerMove(e));
+        this.vinylCircle?.addEventListener('pointerup', (e) => this.handlePointerUp(e));
+        this.vinylCircle?.addEventListener('pointercancel', (e) => this.handlePointerUp(e));
         
         // Search
         this.searchInput?.addEventListener('input', (e) => this.handleSearchInput(e));
@@ -135,7 +152,8 @@ class SpotifyPlayer {
         
         // Click outside to close modals
         document.addEventListener('click', (e) => {
-            if (this.searchModal && !this.searchModal.contains(e.target) && e.target !== this.menuBtn) {
+            // The menu's Search item opens the modal on this same click, so it doesn't count as outside
+            if (this.searchModal && !this.searchModal.contains(e.target) && e.target !== this.menuBtn && !this.navMenu?.contains(e.target)) {
                 if (this.searchModal.style.display !== 'none') {
                     this.closeSearch();
                 }
@@ -143,21 +161,20 @@ class SpotifyPlayer {
         });
     }
     
+    async fetchAccessToken() {
+        const tokenResponse = await fetch('/api/access-token');
+        const tokenData = await tokenResponse.json();
+        if (tokenData.error) {
+            throw new Error(tokenData.error);
+        }
+        return tokenData.access_token;
+    }
+
     async initializeWebPlaybackSDK() {
         try {
-            // Get access token
-            const tokenResponse = await fetch('/api/access-token');
-            const tokenData = await tokenResponse.json();
-            
-            if (tokenData.error) {
-                console.error('Failed to get access token:', tokenData.error);
-                // Fallback to polling
-                this.startPollingFallback();
-                return;
-            }
-            
-            this.accessToken = tokenData.access_token;
-            
+            // Check we can get a token before loading the player
+            await this.fetchAccessToken();
+
             // Wait for SDK to load
             if (window.Spotify) {
                 this.setupPlayer();
@@ -173,7 +190,13 @@ class SpotifyPlayer {
     setupPlayer() {
         this.player = new Spotify.Player({
             name: 'Circular Spotify Player',
-            getOAuthToken: cb => { cb(this.accessToken); },
+            // The SDK calls this on connect and again whenever its token expires (hourly),
+            // so fetch a fresh one each time instead of reusing the first
+            getOAuthToken: cb => {
+                this.fetchAccessToken()
+                    .then(cb)
+                    .catch(error => console.error('Failed to refresh access token:', error));
+            },
             volume: 0.5
         });
         
@@ -310,6 +333,8 @@ class SpotifyPlayer {
         // Note: Lyrics are updated via startLyricsUpdateInterval() for smoother updates
         // This event-based update is kept as backup but the interval is more reliable
         
+        this.isPlaying = !paused;
+        
         // Handle pause/play
         if (paused && this.vinylState === 'lyrics') {
             this.handlePause();
@@ -318,11 +343,6 @@ class SpotifyPlayer {
             if (this.pauseTimestamp) {
                     this.pauseTimestamp.classList.remove('visible');
             }
-                    // Resume album art spinning
-            if (this.albumArt) {
-                    this.albumArt.classList.remove('paused');
-                }
-                
             // If we have lyrics and were in track-info, transition to lyrics
             if (this.vinylState === 'track-info' && this.lyrics.length > 0) {
                     this.transitionToVinylLyrics();
@@ -383,8 +403,10 @@ class SpotifyPlayer {
     }
     
     startPollingFallback() {
+        // Several SDK error events can each trigger the fallback; only start it once
+        if (this.pollingInterval) return;
         console.log('⚠️ Using polling fallback (SDK not available)');
-        setInterval(() => this.checkCurrentTrack(), 500);
+        this.pollingInterval = setInterval(() => this.checkCurrentTrack(), 500);
         // Also start lyrics update interval for fallback
         this.startLyricsUpdateInterval();
     }
@@ -399,6 +421,7 @@ class SpotifyPlayer {
                 return;
             }
             
+            this.isPlaying = Boolean(data.is_playing);
             if (data.is_playing) {
                 // Check if new track - more robust comparison
                 const isNewTrack = !this.currentTrack || 
@@ -449,8 +472,9 @@ class SpotifyPlayer {
         this.clearLyrics();
         this.clearVinylLyrics(); // Clear vinyl mode lyrics immediately
         
-        // Stop any existing progress intervals
+        // Stop any existing progress intervals, and drop a lyrics transition queued for the previous track
         this.stopSmoothProgress();
+        clearTimeout(this.lyricsTransitionTimeout);
         
         // Reset progress tracking for new track
         // Use the provided position if available, otherwise start at 0
@@ -487,7 +511,11 @@ class SpotifyPlayer {
     async fetchLyrics(trackData) {
         try {
             console.log('Fetching lyrics for:', trackData.track_name, 'by', trackData.artist);
-            const response = await fetch(`/lyrics?track=${encodeURIComponent(trackData.track_name)}&artist=${encodeURIComponent(trackData.artist)}`);
+            const params = new URLSearchParams({ track: trackData.track_name, artist: trackData.artist });
+            if (trackData.duration_ms) {
+                params.set('duration_ms', trackData.duration_ms);
+            }
+            const response = await fetch(`/lyrics?${params}`);
             const data = await response.json();
             
             console.log('Lyrics response:', data);
@@ -511,7 +539,7 @@ class SpotifyPlayer {
                     
                     // If in vinyl mode showing track info, transition to lyrics after delay
                     if (this.isVinylMode && this.vinylState === 'track-info') {
-                    setTimeout(() => this.transitionToVinylLyrics(), 5000);
+                    this.scheduleLyricsTransition(5000);
                 }
             } else {
                     console.log('No lyrics found for this track');
@@ -655,7 +683,7 @@ class SpotifyPlayer {
         if (this.currentTrack) {
             this.showVinylTrackInfo(this.currentTrack);
             if (this.lyrics.length > 0) {
-                setTimeout(() => this.transitionToVinylLyrics(), 3000);
+                this.scheduleLyricsTransition(3000);
             }
         }
     }
@@ -681,24 +709,30 @@ class SpotifyPlayer {
             this.albumArt.style.backgroundImage = `url(${trackData.album_art})`;
         }
         
-        this.albumArt.style.transform = '';
-        this.albumArt.classList.remove('blurred', 'paused');
+        this.albumArt.classList.remove('blurred');
         this.albumOverlay.classList.remove('visible');
         
-        this.vinylArtist.textContent = trackData.artist;
-        this.vinylTitle.textContent = trackData.track_name;
+        this.vinylArtist.textContent = trackData.track_name;
+        this.vinylTitle.textContent = trackData.artist;
         
         this.trackInfo.classList.add('visible');
         this.lyricDisplay.classList.remove('visible');
     }
     
+    scheduleLyricsTransition(delayMs) {
+        clearTimeout(this.lyricsTransitionTimeout);
+        this.lyricsTransitionTimeout = setTimeout(() => this.transitionToVinylLyrics(), delayMs);
+    }
+    
     transitionToVinylLyrics() {
         if (this.vinylState !== 'track-info' || this.lyrics.length === 0) return;
-        
+        // Lyric lines only advance during playback, so stay on the title while paused;
+        // resuming triggers this transition from handlePlayerStateChange
+        if (!this.isPlaying) return;
+
         this.vinylState = 'lyrics';
         this.albumArt.classList.add('blurred');
         this.albumOverlay.classList.add('visible');
-        this.albumArt.classList.remove('paused');
         
         // Hide pause timestamp when transitioning to lyrics
         if (this.pauseTimestamp) {
@@ -708,9 +742,8 @@ class SpotifyPlayer {
         this.trackInfo.classList.remove('visible');
         this.lyricDisplay.classList.add('visible');
         
-        if (this.currentLyricIndex >= 0) {
-            this.updateVinylLyrics();
-        }
+        // Before the first line, this shows it dimmed instead of leaving the circle empty
+        this.updateVinylLyrics();
     }
     
     handlePause() {
@@ -718,7 +751,6 @@ class SpotifyPlayer {
         this.trackInfo.classList.add('visible');
         this.albumArt.classList.remove('blurred');
         this.albumOverlay.classList.remove('visible');
-        this.albumArt.classList.add('paused');
         this.vinylState = 'track-info';
         
         if (this.actualCurrentPosition > 0) {
@@ -837,7 +869,7 @@ class SpotifyPlayer {
                 errorMsg = 'Spotify not connected. Please refresh the page and authenticate.';
             }
             
-            this.browsingItems.innerHTML = `<div class="browsing-error">${errorMsg}<br><small>Check browser console (F12) for details.</small></div>`;
+            this.browsingItems.innerHTML = `<div class="browsing-error">${escapeHtml(errorMsg)}<br><small>Check browser console (F12) for details.</small></div>`;
         } finally {
             this.browsingLoading.style.display = 'none';
         }
@@ -863,7 +895,7 @@ class SpotifyPlayer {
         } catch (error) {
             console.error('Error loading albums:', error);
             const errorMsg = error.message || 'Failed to load albums';
-            this.browsingItems.innerHTML = `<div class="browsing-error">${errorMsg}</div>`;
+            this.browsingItems.innerHTML = `<div class="browsing-error">${escapeHtml(errorMsg)}</div>`;
         } finally {
             this.browsingLoading.style.display = 'none';
         }
@@ -889,7 +921,7 @@ class SpotifyPlayer {
         } catch (error) {
             console.error('Error loading recently played:', error);
             const errorMsg = error.message || 'Failed to load recently played';
-            this.browsingItems.innerHTML = `<div class="browsing-error">${errorMsg}</div>`;
+            this.browsingItems.innerHTML = `<div class="browsing-error">${escapeHtml(errorMsg)}</div>`;
         } finally {
             this.browsingLoading.style.display = 'none';
         }
@@ -918,9 +950,9 @@ class SpotifyPlayer {
                     imageUrl = item.images[0].url || '';
                 }
                 element.innerHTML = `
-                    <div class="browsing-item-art" style="background-image: url(${imageUrl})"></div>
+                    <div class="browsing-item-art" style="background-image: url('${escapeHtml(imageUrl)}')"></div>
                     <div class="browsing-item-info">
-                        <div class="browsing-item-name">${item.name || 'Unknown Playlist'}</div>
+                        <div class="browsing-item-name">${escapeHtml(item.name || 'Unknown Playlist')}</div>
                         <div class="browsing-item-meta">${item.tracks?.total || 0} tracks</div>
                     </div>
                 `;
@@ -932,10 +964,10 @@ class SpotifyPlayer {
                     imageUrl = item.images[0].url || '';
                 }
                 element.innerHTML = `
-                    <div class="browsing-item-art" style="background-image: url(${imageUrl})"></div>
+                    <div class="browsing-item-art" style="background-image: url('${escapeHtml(imageUrl)}')"></div>
                     <div class="browsing-item-info">
-                        <div class="browsing-item-name">${item.name || 'Unknown Album'}</div>
-                        <div class="browsing-item-meta">${item.artists?.[0]?.name || 'Unknown Artist'}</div>
+                        <div class="browsing-item-name">${escapeHtml(item.name || 'Unknown Album')}</div>
+                        <div class="browsing-item-meta">${escapeHtml(item.artists?.[0]?.name || 'Unknown Artist')}</div>
                     </div>
                 `;
                 element.addEventListener('click', () => this.playAlbum(item.id));
@@ -953,10 +985,10 @@ class SpotifyPlayer {
                 }
                 
                 element.innerHTML = `
-                    <div class="browsing-item-art" style="background-image: url(${imageUrl})"></div>
+                    <div class="browsing-item-art" style="background-image: url('${escapeHtml(imageUrl)}')"></div>
                     <div class="browsing-item-info">
-                        <div class="browsing-item-name">${trackName}</div>
-                        <div class="browsing-item-meta">${artistName}</div>
+                        <div class="browsing-item-name">${escapeHtml(trackName)}</div>
+                        <div class="browsing-item-meta">${escapeHtml(artistName)}</div>
                     </div>
                 `;
                 
@@ -971,100 +1003,6 @@ class SpotifyPlayer {
             
             this.browsingItems.appendChild(element);
         });
-    }
-    
-    async browsePlaylistTracks(playlistId) {
-        this.browsingState = 'tracks';
-        this.browsingHeader.textContent = 'Playlist Tracks';
-        this.browsingLoading.style.display = 'block';
-        
-        // Store playlist ID and tracks for queue management
-        this.currentPlaylistId = playlistId;
-        
-        try {
-            // Fetch all tracks with pagination
-            let allTracks = [];
-            let offset = 0;
-            const limit = 100;
-            let total = 0;
-            
-            // First request to get total count and first batch
-            const firstResponse = await fetch(`/api/playlist/${playlistId}/tracks?limit=${limit}&offset=0`);
-            const firstData = await firstResponse.json();
-            
-            if (!firstResponse.ok || firstData.error) {
-                throw new Error(firstData.error || `HTTP ${firstResponse.status}`);
-            }
-            
-            total = firstData.tracks?.total || 0;
-            console.log(`Playlist has ${total} total tracks`);
-            
-            // Add first batch
-            allTracks = allTracks.concat(firstData.tracks?.items || []);
-            offset = limit;
-            
-            // Fetch remaining pages
-            while (offset < total && allTracks.length < total) {
-                this.browsingLoading.textContent = `Loading tracks... ${allTracks.length}/${total}`;
-                
-                const response = await fetch(`/api/playlist/${playlistId}/tracks?limit=${limit}&offset=${offset}`);
-                const data = await response.json();
-                
-                if (!response.ok || data.error) {
-                    console.warn(`Error fetching page at offset ${offset}:`, data.error);
-                    break; // Stop if we hit an error
-                }
-                
-                const pageTracks = data.tracks?.items || [];
-                allTracks = allTracks.concat(pageTracks);
-                offset += limit;
-                
-                // Safety check to prevent infinite loops
-                if (pageTracks.length === 0) {
-                    break;
-                }
-            }
-            
-            console.log(`Fetched ${allTracks.length} tracks total (expected ${total})`);
-            
-            // Backend already returns tracks.items as direct track objects (not nested)
-            // So we can use them directly
-            this.browsingData = allTracks.filter(item => {
-                // Filter out null/undefined items
-                if (!item) {
-                    return false;
-                }
-                
-                // Backend already filters, but double-check for safety
-                if (!item.id) {
-                    return false;
-                }
-                
-                // Ensure name exists (backend should have this, but be safe)
-                if (!item.name) {
-                    item.name = `Track ${item.id}`; // Fallback name
-                }
-                
-                return true;
-            });
-            
-            // Store tracks for queue management
-            this.currentPlaylistTracks = this.browsingData;
-            
-            console.log(`Processed ${this.browsingData.length} valid tracks`);
-            
-            if (this.browsingData.length === 0) {
-                this.browsingItems.innerHTML = '<div class="browsing-error">No tracks found in this playlist</div>';
-            } else {
-                this.renderBrowsingItems();
-            }
-        } catch (error) {
-            console.error('Error loading playlist tracks:', error);
-            const errorMsg = error.message || 'Failed to load tracks';
-            this.browsingItems.innerHTML = `<div class="browsing-error">${errorMsg}</div>`;
-        } finally {
-            this.browsingLoading.style.display = 'none';
-        }
     }
     
     showBrowsing() {
@@ -1085,20 +1023,10 @@ class SpotifyPlayer {
     }
     
     goBack() {
-        if (this.browsingState === 'tracks' && this.browsingData.length > 0) {
-            // Go back to playlists/albums
-            if (this.browsingData[0]?.album) {
-                this.browseAlbums();
-            } else {
-                this.browsePlaylists();
-            }
-        } else {
-            // Go back to track info
-            this.hideBrowsing();
-            this.vinylState = 'track-info';
-            if (this.currentTrack) {
-                this.showVinylTrackInfo(this.currentTrack);
-            }
+        this.hideBrowsing();
+        this.vinylState = 'track-info';
+        if (this.currentTrack) {
+            this.showVinylTrackInfo(this.currentTrack);
         }
     }
     
@@ -1149,10 +1077,10 @@ class SpotifyPlayer {
                     const artistName = (track.artists && track.artists.length > 0 && track.artists[0]?.name) ? track.artists[0].name : 'Unknown Artist';
                     
                     element.innerHTML = `
-                        <div class="search-result-art" style="background-image: url(${imageUrl})"></div>
+                        <div class="search-result-art" style="background-image: url('${escapeHtml(imageUrl)}')"></div>
                         <div class="search-result-info">
-                            <div class="search-result-name">${track.name}</div>
-                            <div class="search-result-artist">${artistName}</div>
+                            <div class="search-result-name">${escapeHtml(track.name)}</div>
+                            <div class="search-result-artist">${escapeHtml(artistName)}</div>
                         </div>
                     `;
                     element.addEventListener('click', () => {
@@ -1211,41 +1139,11 @@ class SpotifyPlayer {
     
     async playTrack(trackId) {
         try {
-            // If we're in a playlist context, play the playlist starting from this track
-            if (this.currentPlaylistId && this.currentPlaylistTracks && this.currentPlaylistTracks.length > 0) {
-                // Find the current track index
-                const currentIndex = this.currentPlaylistTracks.findIndex(t => t.id === trackId);
-                if (currentIndex >= 0) {
-                    // Get all track URIs starting from the selected track
-                    const trackUris = this.currentPlaylistTracks.slice(currentIndex).map(t => `spotify:track:${t.id}`);
-                    console.log(`Playing track ${currentIndex + 1} of ${this.currentPlaylistTracks.length} from playlist, adding ${trackUris.length - 1} to queue`);
-                    
-                    // Play first track and add rest to queue
-                    await fetch('/api/play', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ 
-                            type: 'track', 
-                            id: trackId,
-                            track_uris: trackUris
-                        })
-                    });
-                } else {
-                    // Track not found in playlist, just play it normally
-                    await fetch('/api/play', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ type: 'track', id: trackId })
-                    });
-                }
-            } else {
-                // Not in playlist context, just play the track
-                await fetch('/api/play', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ type: 'track', id: trackId })
-                });
-            }
+            await fetch('/api/play', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ type: 'track', id: trackId })
+            });
             
             this.hideBrowsing();
             this.vinylState = 'track-info';
@@ -1263,9 +1161,6 @@ class SpotifyPlayer {
             });
             this.hideBrowsing();
             this.vinylState = 'track-info';
-            // Clear playlist context when playing album
-            this.currentPlaylistId = null;
-            this.currentPlaylistTracks = [];
         } catch (error) {
             console.error('Play album error:', error);
         }
@@ -1287,9 +1182,6 @@ class SpotifyPlayer {
                 body: JSON.stringify({ type: 'playlist', id: playlistId })
             });
             
-            // Store playlist context for queue management
-            this.currentPlaylistId = playlistId;
-            
             this.hideBrowsing();
             this.vinylState = 'track-info';
             console.log('Playing playlist with shuffle:', playlistId);
@@ -1298,40 +1190,27 @@ class SpotifyPlayer {
         }
     }
     
-    // GESTURES (keeping existing gesture code)
-    handleTouchStart(e) {
+    // GESTURES
+    handlePointerDown(e) {
         if (!this.isVinylMode || !this.currentTrack || this.vinylState === 'browsing') return;
+        if (this.isDragging || e.button !== 0) return;
         e.preventDefault();
-        this.startGesture(e.touches[0].clientX, e.touches[0].clientY);
-    }
-    
-    handleTouchMove(e) {
-        if (!this.isDragging) return;
-        e.preventDefault();
-        this.updateGesture(e.touches[0].clientX, e.touches[0].clientY);
-    }
-    
-    handleTouchEnd(e) {
-        if (!this.isDragging) return;
-        e.preventDefault();
-        this.endGesture();
-    }
-    
-    handleMouseStart(e) {
-        if (!this.isVinylMode || !this.currentTrack || this.vinylState === 'browsing') return;
-        e.preventDefault();
+        // Keep receiving moves and the release even if the pointer leaves the circle
+        this.vinylCircle.setPointerCapture(e.pointerId);
+        this.activePointerId = e.pointerId;
         this.startGesture(e.clientX, e.clientY);
     }
     
-    handleMouseMove(e) {
-        if (!this.isDragging) return;
+    handlePointerMove(e) {
+        if (!this.isDragging || e.pointerId !== this.activePointerId) return;
         e.preventDefault();
         this.updateGesture(e.clientX, e.clientY);
     }
     
-    handleMouseEnd(e) {
-        if (!this.isDragging) return;
+    handlePointerUp(e) {
+        if (!this.isDragging || e.pointerId !== this.activePointerId) return;
         e.preventDefault();
+        this.activePointerId = null;
         this.endGesture();
     }
     
@@ -1358,6 +1237,7 @@ class SpotifyPlayer {
         if (angleDiff < -180) angleDiff += 360;
         
         this.totalAngleChange += angleDiff;
+        this.rotation += angleDiff;
         this.lastAngle = currentAngle;
         
         const seekPerDegree = 30000 / 360;
@@ -1368,7 +1248,6 @@ class SpotifyPlayer {
             this.actualCurrentPosition = this.seekPosition;
             const progress = this.seekPosition / this.currentTrack.duration_ms;
             this.updateProgressBars(progress);
-            this.albumArt.style.transform = `rotate(${this.totalAngleChange}deg)`;
             this.seekTimestamp.textContent = this.formatTime(this.seekPosition);
             
             if (this.vinylState === 'lyrics' && this.lyrics.length > 0) {
@@ -1385,7 +1264,6 @@ class SpotifyPlayer {
         this.isDragging = false;
         this.seekTimestamp.classList.remove('visible');
         this.albumArt.classList.remove('seeking');
-        this.albumArt.style.transform = '';
         
         if (this.vinylState === 'lyrics') {
             this.albumOverlay.classList.add('visible');
@@ -1463,6 +1341,18 @@ class SpotifyPlayer {
         const dx = x - this.centerX;
         const dy = y - this.centerY;
         return Math.atan2(dy, dx) * (180 / Math.PI);
+    }
+    
+    startSpinLoop() {
+        const tick = (now) => {
+            if (this.lastFrameTime !== null && this.isPlaying && !this.isDragging) {
+                this.rotation = (this.rotation + (now - this.lastFrameTime) * SPIN_DEGREES_PER_MS) % 360;
+            }
+            this.lastFrameTime = now;
+            this.albumArt.style.transform = `rotate(${this.rotation}deg)`;
+            requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
     }
     
     formatTime(ms) {

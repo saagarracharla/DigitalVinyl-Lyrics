@@ -17,10 +17,6 @@ def create_app():
     def index():
         return render_template('index.html')
     
-    @app.route('/test')
-    def test():
-        return render_template('test.html')
-    
     @app.route('/current-track')
     def current_track():
         return spotify_service.get_current_track()
@@ -29,11 +25,12 @@ def create_app():
     def get_lyrics():
         track = request.args.get('track')
         artist = request.args.get('artist')
+        duration_ms = request.args.get('duration_ms', type=int)
         
         if not track or not artist:
             return jsonify({'lines': []})
         
-        return lyrics_service.get_lyrics(track, artist)
+        return lyrics_service.get_lyrics(track, artist, duration_ms)
     
     @app.route('/play-pause', methods=['POST'])
     def play_pause():
@@ -84,8 +81,7 @@ def create_app():
         item_type = data.get('type')  # 'track', 'album', 'playlist'
         item_id = data.get('id')
         context_uri = data.get('context_uri')
-        track_uris = data.get('track_uris')  # Array of track URIs for queue
-        return spotify_service.play_item(item_type, item_id, context_uri, track_uris)
+        return spotify_service.play_item(item_type, item_id, context_uri)
     
     @app.route('/api/queue', methods=['GET'])
     def get_queue():
@@ -130,20 +126,11 @@ def create_app():
             if not spotify_service.sp:
                 return jsonify({'error': 'Spotify not connected'}), 500
             
-            # Get cached token
-            token_info = spotify_service.sp.auth_manager.get_cached_token()
-            
-            # Check if token exists and is not expired
-            if token_info and not spotify_service.sp.auth_manager.is_token_expired(token_info):
-                return jsonify({'access_token': token_info['access_token']})
-            
-            # If no token or expired, get a new one
-            # This will trigger auth flow if needed
+            # Returns the cached token, refreshing it first if it has expired
             token = spotify_service.sp.auth_manager.get_access_token(as_dict=False)
             if token:
                 return jsonify({'access_token': token})
-            else:
-                return jsonify({'error': 'Failed to get access token'}), 500
+            return jsonify({'error': 'Failed to get access token'}), 500
         except Exception as e:
             return jsonify({'error': str(e)}), 500
     
@@ -164,4 +151,10 @@ def create_app():
 
 if __name__ == '__main__':
     app = create_app()
-    app.run(debug=True, host='0.0.0.0', port=5004)  # 0.0.0.0 for Pi deployment
+    # Defaults to localhost only: /api/access-token hands out the Spotify token, and the
+    # debugger can run code, so neither should be reachable from the rest of the network.
+    app.run(
+        debug=os.getenv('FLASK_DEBUG') == '1',
+        host=os.getenv('HOST', '127.0.0.1'),
+        port=int(os.getenv('PORT', 5004)),
+    )

@@ -1,22 +1,38 @@
-# 🎤 Spotify Karaoke - Circular Player
+# 🎵 Digital Vinyl with Lyrics
 
-A full-featured Spotify player with real-time karaoke lyrics, designed for circular displays. Features a beautiful vinyl-style interface with browsing, playlist management, and synchronized lyrics.
+A beautiful circular Spotify player that brings the classic vinyl experience to life with real-time synchronized lyrics. Designed for circular displays with touch controls and a stunning vinyl-style interface.
+
+## Screenshots
+
+### Album View
+![Album View](app/Images/Album.png)
+
+### Lyrics View  
+![Lyrics View](app/Images/Lyrics.png)
 
 ## Features
 
 ✅ **Full Spotify Player** - Browse playlists, albums, search, and control playback  
 ✅ **Real-time Lyrics** - Synced word-by-word highlighting with smooth transitions  
 ✅ **Circular UI Design** - Optimized for circular displays with vinyl-style interface  
-✅ **Playlist Support** - Play playlists with shuffle, automatic queue management  
+✅ **Playlist Support** - Play your playlists and saved albums  
 ✅ **Web Playback SDK** - Real-time updates without polling  
 ✅ **Touch Gestures** - Seek by dragging on the vinyl circle  
 ✅ **Free Lyrics** - LRCLib API integration (no API key needed)  
+
+## Requirements
+
+- Python 3.9+
+- A Spotify account. Playing audio in the browser (Web Playback SDK) needs **Spotify Premium**. Without it, the app still shows lyrics and controls playback on your other devices.
+- A Spotify app from the [Developer Dashboard](https://developer.spotify.com/dashboard). Apps in development mode only work for accounts you add under *User Management*.
 
 ## Setup
 
 ### 1. Install dependencies
 ```bash
-pip3 install -r requirements.txt
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 ```
 
 ### 2. Set up Spotify API
@@ -35,8 +51,13 @@ SPOTIFY_REDIRECT_URI=http://127.0.0.1:8888/callback
 
 ### 4. Run the app
 ```bash
-python3 main.py
+source .venv/bin/activate
+python main.py
 ```
+
+The first run opens a Spotify login in your browser. After that the login is saved in `.cache`.
+
+The server only listens on `127.0.0.1` by default. See `.env.example` for `HOST`, `PORT` and `FLASK_DEBUG`.
 
 ### 5. Open browser
 Visit: http://127.0.0.1:5004
@@ -55,11 +76,6 @@ Visit: http://127.0.0.1:5004
 - Click **Albums** to browse your saved albums
 - Click **Search** to search for tracks
 - Click **Recent** to see recently played tracks
-
-### Playlist Features
-- When you play a track from a playlist, remaining tracks are automatically queued
-- Playlists play with shuffle enabled by default
-- All tracks in a playlist are loaded and queued automatically
 
 ## Architecture
 
@@ -87,7 +103,7 @@ Visit: http://127.0.0.1:5004
 - `GET /api/albums` - Get saved albums
 - `GET /api/search?q=<query>` - Search tracks
 - `POST /api/play` - Play track/album/playlist
-- `GET /api/lyrics?track=<name>&artist=<artist>` - Get lyrics
+- `GET /lyrics?track=<name>&artist=<artist>&duration_ms=<ms>` - Get synced lyrics (duration picks the matching version)
 - `GET /api/access-token` - Get Web Playback SDK token
 - `POST /api/transfer-playback` - Transfer to Web SDK device
 
@@ -95,7 +111,6 @@ Visit: http://127.0.0.1:5004
 
 - **Real-time Updates**: Web Playback SDK events + 100ms position polling for smooth lyrics
 - **Lyrics Sync**: Millisecond-accurate timing with LRCLib
-- **Queue Management**: Automatic queue building when playing from playlists
 - **Circular Design**: Optimized for 1080x1080 circular displays
 
 ## License

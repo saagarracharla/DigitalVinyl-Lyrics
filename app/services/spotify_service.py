@@ -184,25 +184,14 @@ class SpotifyService:
         except Exception as e:
             return jsonify({'error': str(e)})
     
-    def play_item(self, item_type, item_id, context_uri=None, track_uris=None):
-        """Play a track, album, or playlist. If track_uris provided, adds them to queue."""
+    def play_item(self, item_type, item_id, context_uri=None):
+        """Play a track, album, or playlist"""
         if not self.sp:
             return jsonify({'error': 'Spotify not connected'})
         
         try:
             if item_type == 'track':
-                # If track_uris provided, play first track and add rest to queue
-                if track_uris and len(track_uris) > 1:
-                    # Play first track
-                    self.sp.start_playback(uris=[track_uris[0]])
-                    # Add remaining tracks to queue
-                    for uri in track_uris[1:]:
-                        try:
-                            self.sp.add_to_queue(uri)
-                        except:
-                            pass  # Ignore errors for queue additions
-                else:
-                    self.sp.start_playback(uris=[f'spotify:track:{item_id}'])
+                self.sp.start_playback(uris=[f'spotify:track:{item_id}'])
             elif item_type == 'album':
                 self.sp.start_playback(context_uri=f'spotify:album:{item_id}')
             elif item_type == 'playlist':
@@ -263,43 +252,27 @@ class SpotifyService:
             return jsonify({'error': 'Spotify not connected'})
         
         try:
-            playback = self.sp.current_playback()
-            if not playback:
-                return jsonify({'queue': [], 'currently_playing': None})
-            
-            # Get currently playing track
-            current = playback.get('item')
-            current_track = None
-            if current:
-                current_track = {
-                    'id': current['id'],
-                    'name': current['name'],
-                    'artists': [a['name'] for a in current['artists']],
-                    'album': current['album']['name'],
-                    'album_art': current['album']['images'][0]['url'] if current['album']['images'] else None,
-                    'duration_ms': current['duration_ms']
-                }
-            
-            # Get next tracks from track_window
-            queue = []
-            if playback.get('track_window'):
-                next_tracks = playback['track_window'].get('next_tracks', [])
-                for track in next_tracks:
-                    queue.append({
-                        'id': track['id'],
-                        'name': track['name'],
-                        'artists': [a['name'] for a in track['artists']],
-                        'album': track['album']['name'],
-                        'album_art': track['album']['images'][0]['url'] if track['album']['images'] else None,
-                        'duration_ms': track['duration_ms']
-                    })
-            
+            data = self.sp.queue()
+            current = data.get('currently_playing')
             return jsonify({
-                'currently_playing': current_track,
-                'queue': queue
+                'currently_playing': self._summarize_track(current) if current else None,
+                # Episodes and local files in the queue lack track fields
+                'queue': [self._summarize_track(t) for t in data.get('queue', []) if t and t.get('album')]
             })
         except Exception as e:
             return jsonify({'error': str(e)})
+    
+    def _summarize_track(self, track):
+        album = track.get('album') or {}
+        images = album.get('images') or []
+        return {
+            'id': track.get('id'),
+            'name': track.get('name'),
+            'artists': [a['name'] for a in track.get('artists', [])],
+            'album': album.get('name'),
+            'album_art': images[0]['url'] if images else None,
+            'duration_ms': track.get('duration_ms')
+        }
     
     def set_shuffle(self, state):
         """Set shuffle state"""
@@ -320,26 +293,5 @@ class SpotifyService:
         try:
             self.sp.repeat(state)
             return jsonify({'success': True, 'repeat': state})
-        except Exception as e:
-            return jsonify({'error': str(e)})
-    
-    def play_playlist_from_track(self, playlist_id, track_id, track_uris):
-        """Play a playlist starting from a specific track, with all tracks in queue"""
-        if not self.sp:
-            return jsonify({'error': 'Spotify not connected'})
-        
-        try:
-            # Start playback with the playlist context
-            self.sp.start_playback(context_uri=f'spotify:playlist:{playlist_id}')
-            
-            # If the first track isn't the selected one, seek to it
-            # Note: We can't directly seek to a track, but we can add all tracks to queue
-            # and the playlist context will handle the queue
-            
-            return jsonify({
-                'success': True,
-                'playlist_id': playlist_id,
-                'start_track_id': track_id
-            })
         except Exception as e:
             return jsonify({'error': str(e)})
