@@ -27,24 +27,30 @@ class SpotifyService:
             self.sp = None
     
     def get_current_track(self):
-        """Get current playing track - matches working spotify_karaoke.py format"""
+        """Get the current track, whether playing or paused, on any device"""
         if not self.sp:
             return jsonify({'error': 'Spotify not connected', 'is_playing': False})
         
         try:
             playback = self.sp.current_playback()
-            if playback and playback.get('is_playing'):
-                track = playback['item']
-                return jsonify({
-                    'track_name': track['name'],
-                    'artist': track['artists'][0]['name'],
-                    'progress_ms': playback['progress_ms'],
-                    'duration_ms': track['duration_ms'],
-                    'is_playing': True,
-                    # Add album art for vinyl mode
-                    'album_art': track['album']['images'][0]['url'] if track['album']['images'] else None
-                })
-            return jsonify({'is_playing': False})
+            track = playback.get('item') if playback else None
+            # Podcast episodes have no album or artists
+            if not track or track.get('type') != 'track':
+                return jsonify({'is_playing': False})
+            
+            images = track['album']['images']
+            context = playback.get('context') or {}
+            return jsonify({
+                'track_name': track['name'],
+                'artist': track['artists'][0]['name'],
+                'artists': ', '.join(a['name'] for a in track['artists']),
+                'uri': track['uri'],
+                'context_uri': context.get('uri'),
+                'progress_ms': playback['progress_ms'],
+                'duration_ms': track['duration_ms'],
+                'is_playing': playback['is_playing'],
+                'album_art': images[0]['url'] if images else None
+            })
         except Exception as e:
             return jsonify({'error': str(e), 'is_playing': False})
     
@@ -184,20 +190,20 @@ class SpotifyService:
         except Exception as e:
             return jsonify({'error': str(e)})
     
-    def play_item(self, item_type, item_id, context_uri=None):
+    def play_item(self, item_type, item_id, context_uri=None, device_id=None):
         """Play a track, album, or playlist"""
         if not self.sp:
             return jsonify({'error': 'Spotify not connected'})
         
         try:
             if item_type == 'track':
-                self.sp.start_playback(uris=[f'spotify:track:{item_id}'])
+                self.sp.start_playback(device_id=device_id, uris=[f'spotify:track:{item_id}'])
             elif item_type == 'album':
-                self.sp.start_playback(context_uri=f'spotify:album:{item_id}')
+                self.sp.start_playback(device_id=device_id, context_uri=f'spotify:album:{item_id}')
             elif item_type == 'playlist':
-                self.sp.start_playback(context_uri=f'spotify:playlist:{item_id}')
+                self.sp.start_playback(device_id=device_id, context_uri=f'spotify:playlist:{item_id}')
             elif context_uri:
-                self.sp.start_playback(context_uri=context_uri)
+                self.sp.start_playback(device_id=device_id, context_uri=context_uri)
             else:
                 return jsonify({'error': 'Invalid item type or context_uri'})
             
@@ -274,13 +280,13 @@ class SpotifyService:
             'duration_ms': track.get('duration_ms')
         }
     
-    def set_shuffle(self, state):
+    def set_shuffle(self, state, device_id=None):
         """Set shuffle state"""
         if not self.sp:
             return jsonify({'error': 'Spotify not connected'})
         
         try:
-            self.sp.shuffle(state)
+            self.sp.shuffle(state, device_id=device_id)
             return jsonify({'success': True, 'shuffle': state})
         except Exception as e:
             return jsonify({'error': str(e)})

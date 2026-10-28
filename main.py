@@ -81,7 +81,8 @@ def create_app():
         item_type = data.get('type')  # 'track', 'album', 'playlist'
         item_id = data.get('id')
         context_uri = data.get('context_uri')
-        return spotify_service.play_item(item_type, item_id, context_uri)
+        device_id = data.get('device_id')  # play here even when no device is active yet
+        return spotify_service.play_item(item_type, item_id, context_uri, device_id)
     
     @app.route('/api/queue', methods=['GET'])
     def get_queue():
@@ -99,7 +100,7 @@ def create_app():
     def set_shuffle():
         data = request.json
         state = data.get('state', False)
-        return spotify_service.set_shuffle(state)
+        return spotify_service.set_shuffle(state, data.get('device_id'))
     
     @app.route('/api/repeat', methods=['PUT'])
     def set_repeat():
