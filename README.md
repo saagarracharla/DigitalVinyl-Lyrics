@@ -20,6 +20,12 @@ A beautiful circular Spotify player that brings the classic vinyl experience to 
 ✅ **Touch Gestures** - Seek by dragging on the vinyl circle  
 ✅ **Free Lyrics** - LRCLib API integration (no API key needed)  
 
+## Requirements
+
+- Python 3.9+
+- A Spotify account. Playing audio in the browser (Web Playback SDK) needs **Spotify Premium**. Without it, the app still shows lyrics and controls playback on your other devices.
+- A Spotify app from the [Developer Dashboard](https://developer.spotify.com/dashboard). Apps in development mode only work for accounts you add under *User Management*.
+
 ## Setup
 
 ### 1. Install dependencies

@@ -23,9 +23,9 @@ wheels/
 .installed.cfg
 *.egg
 
-# Spotify Cache
+# Spotify login tokens (spotipy writes these; never commit them)
 .cache
-.cache-*
+.cache*
 
 # IDE
 .vscode/
@@ -44,4 +44,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Virtual environment
 .venv/
