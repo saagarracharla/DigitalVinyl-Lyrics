@@ -5,14 +5,76 @@
 
 const DEVICE_NAME = 'Digital Vinyl';
 
-const SPIN_DEGREES_PER_MS = 360 / 20000;   // one turn every 20s while playing
-const SEEK_MS_PER_DEGREE = 30000 / 360;    // a full turn of the record seeks 30s
 const TAP_MAX_DEGREES = 3;                 // turning less than this counts as a tap
 const MIN_SEEK_MS = 500;                   // smaller net drags don't seek
 const ART_INTRO_MS = 4000;                 // show the cover this long before lyrics on a new track
 const SEEK_SETTLE_MS = 2000;               // after seeking, ignore stale positions for this long
 const SYNC_INTERVAL_MS = 1000;
 const TOAST_MS = 2600;
+const AUTO_HIDE_MS = 5000;                 // song info / buttons fade after this long, when enabled
+
+const SPIN_PERIOD_MS = { slow: 40000, normal: 20000, fast: 10000 };   // time for one full turn
+const SETTINGS_STORAGE_KEY = 'digitalVinyl.settings';
+
+// Everything on the Settings screen. Rendering, defaults and storage all come from this list.
+const SETTINGS_SCHEMA = [
+    { section: 'Lyrics', items: [
+        { key: 'autoLyrics', type: 'toggle', default: true, label: 'Show lyrics automatically', description: 'Switch to lyrics a few seconds into each song' },
+        { key: 'lyricsBackground', type: 'choice', default: 'album', label: 'Background',
+          options: [['album', 'Album colour'], ['cover', 'Spinning cover'], ['black', 'Black']] },
+        { key: 'lyricsSize', type: 'choice', default: 'medium', label: 'Text size',
+          options: [['small', 'Small'], ['medium', 'Medium'], ['large', 'Large']] },
+        { key: 'lyricsContext', type: 'toggle', default: true, label: 'Show surrounding lines', description: 'Turn off to see only the line being sung' },
+    ] },
+    { section: 'Now Playing', items: [
+        { key: 'fadeSongInfo', type: 'toggle', default: false, label: 'Fade song info', description: 'Hide the title and artist after 5 seconds' },
+        { key: 'spin', type: 'toggle', default: true, label: 'Spin the record' },
+        { key: 'spinSpeed', type: 'choice', default: 'normal', label: 'Spin speed',
+          options: [['slow', 'Slow'], ['normal', 'Normal'], ['fast', 'Fast']] },
+        { key: 'vinylTexture', type: 'toggle', default: true, label: 'Grooves and shine', description: 'Record texture over the cover' },
+    ] },
+    { section: 'Controls', items: [
+        { key: 'autoHideControls', type: 'toggle', default: false, label: 'Auto-hide buttons', description: 'Hide while playing; tap the record to bring them back' },
+        { key: 'scrubSeconds', type: 'choice', default: '30', label: 'One turn of the record skips',
+          options: [['15', '15 sec'], ['30', '30 sec'], ['60', '1 min']] },
+        { key: 'shufflePlaylists', type: 'toggle', default: true, label: 'Shuffle playlists', description: 'Start playlists in shuffle' },
+    ] },
+    { section: 'Display', items: [
+        { key: 'showProgress', type: 'toggle', default: true, label: 'Progress ring' },
+        { key: 'ringColor', type: 'choice', default: 'white', label: 'Ring colour',
+          options: [['white', 'White'], ['green', 'Green'], ['album', 'Album']] },
+        { key: 'idleClock', type: 'toggle', default: true, label: 'Clock when nothing is playing' },
+    ] },
+];
+const SETTING_ITEMS = SETTINGS_SCHEMA.flatMap(group => group.items);
+const DEFAULT_SETTINGS = Object.fromEntries(SETTING_ITEMS.map(item => [item.key, item.default]));
+
+// Settings are a per-device preference, so browser storage is enough. It can be unavailable
+// (private windows, blocked storage), in which case the defaults are used.
+function loadSettings() {
+    try {
+        const saved = JSON.parse(localStorage.getItem(SETTINGS_STORAGE_KEY) || '{}');
+        const settings = { ...DEFAULT_SETTINGS };
+        for (const item of SETTING_ITEMS) {
+            const value = saved[item.key];
+            const valid = item.type === 'toggle'
+                ? typeof value === 'boolean'
+                : item.options.some(([optionValue]) => optionValue === value);
+            if (valid) settings[item.key] = value;
+        }
+        return settings;
+    } catch (error) {
+        return { ...DEFAULT_SETTINGS };
+    }
+}
+
+function saveSettings(settings) {
+    try {
+        localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+    } catch (error) {
+        console.warn('Could not save settings:', error);
+    }
+}
 
 const RING_RADIUS = 532;                   // matches the SVG in index.html (viewBox 1080)
 const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
@@ -111,6 +173,10 @@ class VinylPlayer {
         this.rotation = 0;
         this.lastFrameTime = null;
         this.toastTimer = null;
+        this.songInfoTimer = null;
+        this.controlsTimer = null;
+        this.controlsHiddenAtPointerDown = false;
+        this.settings = loadSettings();
 
         // Library
         this.libraryTab = 'playlists';
@@ -125,16 +191,21 @@ class VinylPlayer {
         this.el = Object.fromEntries([
             'player', 'disc', 'albumArt', 'progressFill', 'progressKnob', 'trackTitle', 'trackArtist',
             'lyricsView', 'lyricsLines', 'seekTime', 'seekTotal', 'library', 'searchInput', 'libraryList',
-            'libraryBtn', 'prevBtn', 'playPauseBtn', 'nextBtn', 'toast'
+            'libraryBtn', 'prevBtn', 'playPauseBtn', 'nextBtn', 'toast', 'libraryTitle', 'idleTime', 'idleDate'
         ].map(id => [id, document.getElementById(id)]));
         this.el.chips = [...document.querySelectorAll('.chip')];
 
         this.bindEvents();
+        this.applySettings();
         requestAnimationFrame(now => this.frame(now));
 
         // Show whatever is playing right away (even on another device), then keep in sync
         this.sync();
-        setInterval(() => this.sync(), SYNC_INTERVAL_MS);
+        this.updateClock();
+        setInterval(() => {
+            this.sync();
+            this.updateClock();
+        }, SYNC_INTERVAL_MS);
         this.initializeWebPlaybackSDK();
     }
 
@@ -163,6 +234,12 @@ class VinylPlayer {
 
         // Browsers only allow audio after a user gesture; let the SDK use the first one
         document.addEventListener('pointerdown', () => this.player?.activateElement?.(), { capture: true });
+
+        // Any touch brings auto-hidden buttons back
+        this.el.player.addEventListener('pointerdown', () => {
+            this.controlsHiddenAtPointerDown = this.el.player.classList.contains('controls-hidden');
+            this.wakeControls();
+        }, { capture: true });
     }
 
     // ---------- Spotify connection ----------
@@ -308,10 +385,7 @@ class VinylPlayer {
             this.highlightPlayingRows();
         }
 
-        this.isPlaying = playback.isPlaying;
-        this.el.player.classList.toggle('is-playing', this.isPlaying);
-        this.el.playPauseBtn.setAttribute('aria-label', this.isPlaying ? 'Pause' : 'Play');
-        this.updateView();
+        this.setPlaying(playback.isPlaying);
     }
 
     loadTrack(track) {
@@ -328,23 +402,39 @@ class VinylPlayer {
         this.lyricIndex = -1;
         this.el.lyricsLines.innerHTML = '';
 
-        // Each new record starts on its cover, then moves to lyrics
+        // Each new record starts on its cover. With "Show lyrics automatically" on it moves to
+        // lyrics after the intro; tapping only changes the view for the current song.
+        this.showLyrics = this.settings.autoLyrics;
         this.introUntil = performance.now() + ART_INTRO_MS;
         clearTimeout(this.introTimer);
         this.introTimer = setTimeout(() => this.updateView(), ART_INTRO_MS);
 
         this.fetchLyrics(track);
         this.highlightPlayingRows();
+        this.refreshSongInfoFade();
+        if (this.isLibraryOpen() && this.libraryTab === 'queue' && !this.el.searchInput.value.trim()) {
+            this.loadQueue();
+        }
     }
 
     clearTrack() {
         if (!this.track) return;
         this.track = null;
-        this.isPlaying = false;
         this.lyrics = [];
         this.el.lyricsLines.innerHTML = '';
-        this.el.player.classList.remove('is-playing');
+        this.setPlaying(false);
+    }
+
+    setPlaying(isPlaying) {
+        const changed = isPlaying !== this.isPlaying;
+        this.isPlaying = isPlaying;
+        this.el.player.classList.toggle('is-playing', isPlaying);
+        this.el.playPauseBtn.setAttribute('aria-label', isPlaying ? 'Pause' : 'Play');
         this.updateView();
+        if (changed) {
+            this.refreshSongInfoFade();
+            this.wakeControls();
+        }
     }
 
     setPosition(ms) {
@@ -361,8 +451,9 @@ class VinylPlayer {
     // ---------- Rendering ----------
 
     frame(now) {
-        if (this.lastFrameTime !== null && this.isPlaying && !this.drag && !reducedMotion.matches) {
-            this.rotation = (this.rotation + (now - this.lastFrameTime) * SPIN_DEGREES_PER_MS) % 360;
+        if (this.lastFrameTime !== null && this.isPlaying && !this.drag && this.settings.spin && !reducedMotion.matches) {
+            const degreesPerMs = 360 / SPIN_PERIOD_MS[this.settings.spinSpeed];
+            this.rotation = (this.rotation + (now - this.lastFrameTime) * degreesPerMs) % 360;
         }
         this.lastFrameTime = now;
         this.el.albumArt.style.transform = `rotate(${this.rotation}deg)`;
@@ -398,6 +489,7 @@ class VinylPlayer {
         if (view === 'lyrics') {
             this.renderLyricPosition(true);
         }
+        this.refreshSongInfoFade();
     }
 
     // ---------- Lyrics ----------
@@ -532,7 +624,8 @@ class VinylPlayer {
             this.el.seekTotal.textContent = `/ ${formatTime(this.track.durationMs)}`;
             this.el.player.classList.add('is-seeking');
         }
-        drag.positionMs = clamp(drag.startPositionMs + drag.totalDegrees * SEEK_MS_PER_DEGREE, 0, this.track.durationMs);
+        const msPerDegree = Number(this.settings.scrubSeconds) * 1000 / 360;
+        drag.positionMs = clamp(drag.startPositionMs + drag.totalDegrees * msPerDegree, 0, this.track.durationMs);
         this.el.seekTime.textContent = formatTime(drag.positionMs);
     }
 
@@ -554,6 +647,7 @@ class VinylPlayer {
 
     // Tap a stopped record to start it; tap a spinning one to switch between cover and lyrics
     handleTap() {
+        if (this.controlsHiddenAtPointerDown) return;
         if (!this.isPlaying) {
             this.playPause();
             return;
@@ -595,9 +689,7 @@ class VinylPlayer {
             } else {
                 const data = await this.postJson('/play-pause');
                 this.setPosition(this.currentPositionMs());
-                this.isPlaying = data.action === 'playing';
-                this.el.player.classList.toggle('is-playing', this.isPlaying);
-                this.updateView();
+                this.setPlaying(data.action === 'playing');
             }
         } catch (error) {
             console.error('Play/pause error:', error);
@@ -649,13 +741,12 @@ class VinylPlayer {
         // Play on this device when it's connected, otherwise on whichever device is active
         const deviceId = this.isSDKReady ? this.deviceId : undefined;
         try {
-            if (item.kind === 'playlist') {
-                // Playlists start shuffled; if shuffle fails, still play
+            if (item.kind === 'playlist' && this.settings.shufflePlaylists) {
+                // If shuffle fails, still play
                 await this.postJson('/api/shuffle', { state: true, device_id: deviceId }, 'PUT')
                     .catch(error => console.warn('Shuffle failed:', error));
             }
             await this.postJson('/api/play', { type: item.kind, id: item.id, device_id: deviceId });
-            this.showLyrics = true;
             this.closeLibrary();
         } catch (error) {
             console.error('Play error:', error);
@@ -693,11 +784,24 @@ class VinylPlayer {
         this.el.libraryBtn.setAttribute('aria-label', 'Open library');
         this.el.searchInput.blur();
         clearTimeout(this.searchTimer);
+        this.wakeControls();
     }
 
     loadLibraryTab(tab) {
         this.libraryTab = tab;
         this.setActiveChip(tab);
+        const showingSettings = tab === 'settings';
+        this.el.library.classList.toggle('showing-settings', showingSettings);
+        this.el.libraryTitle.textContent = showingSettings ? 'Settings' : 'Your Library';
+        if (showingSettings) {
+            this.libraryRequest++;   // drop any list still loading
+            this.renderSettings();
+            return;
+        }
+        if (tab === 'queue') {
+            this.loadQueue();
+            return;
+        }
         const source = LIBRARY_SOURCES[tab];
         this.loadList(source.url, data => data.items, source.kind);
     }
@@ -719,6 +823,8 @@ class VinylPlayer {
                 return;
             }
             this.setActiveChip(null);
+            this.el.library.classList.remove('showing-settings');
+            this.el.libraryTitle.textContent = 'Your Library';
             const params = new URLSearchParams({ q: query, type: 'track', limit: 20 });
             this.loadList(`/api/search?${params}`, data => data.tracks?.items, 'track', 'No results');
         }, 300);
@@ -769,22 +875,130 @@ class VinylPlayer {
         }
         this.el.libraryList.replaceChildren(...items.map(item => {
             const { art, meta } = this.describeItem(item, kind);
-            const row = document.createElement('button');
-            row.type = 'button';
-            row.className = 'row';
-            row.dataset.uri = item.uri || '';
-            row.innerHTML = `
-                <span class="row-art" style="background-image: url('${escapeHtml(art)}')"></span>
-                <span class="row-text">
-                    <span class="row-title">${escapeHtml(item.name)}</span>
-                    <span class="row-meta">${escapeHtml(meta)}</span>
-                </span>
-            `;
-            row.addEventListener('click', () => this.play({ kind, id: item.id }));
-            return row;
+            return this.buildRow({
+                art,
+                title: item.name,
+                meta,
+                uri: item.uri,
+                onSelect: () => this.play({ kind, id: item.id }),
+                // Songs can go in the queue; playlists and albums can't
+                onAdd: kind === 'track' && item.uri ? () => this.addToQueue(item.uri, item.name) : null
+            });
         }));
         this.highlightPlayingRows();
         this.el.libraryList.scrollTop = 0;
+    }
+
+    buildRow({ art, title, meta, uri, onSelect, onAdd }) {
+        const row = document.createElement('div');
+        row.className = 'row';
+        row.dataset.uri = uri || '';
+
+        const main = document.createElement('button');
+        main.type = 'button';
+        main.className = 'row-main';
+        main.innerHTML = `
+            <span class="row-art" style="background-image: url('${escapeHtml(art)}')"></span>
+            <span class="row-text">
+                <span class="row-title">${escapeHtml(title)}</span>
+                <span class="row-meta">${escapeHtml(meta)}</span>
+            </span>
+        `;
+        main.addEventListener('click', onSelect);
+        row.appendChild(main);
+
+        if (onAdd) {
+            const add = document.createElement('button');
+            add.type = 'button';
+            add.className = 'row-add';
+            add.setAttribute('aria-label', `Add ${title} to queue`);
+            add.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9.5" fill="none" stroke="currentColor" stroke-width="1.8" /><path d="M12 7.5v9M7.5 12h9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" /></svg>';
+            add.addEventListener('click', onAdd);
+            row.appendChild(add);
+        }
+        return row;
+    }
+
+    // ---------- Queue ----------
+    // Spotify's API can read the queue and add to it, but not remove or reorder items.
+
+    async loadQueue() {
+        const request = ++this.libraryRequest;
+        this.renderSkeleton();
+        try {
+            const response = await fetch('/api/queue');
+            const data = await response.json();
+            if (!response.ok || data.error) {
+                throw new Error(data.error || `HTTP ${response.status}`);
+            }
+            if (request !== this.libraryRequest) return;
+            this.renderQueue(data.currently_playing, data.queue || []);
+        } catch (error) {
+            console.error('Queue error:', error);
+            if (request === this.libraryRequest) {
+                this.renderListMessage("Couldn't load your queue. Start playing something first.");
+            }
+        }
+    }
+
+    renderQueue(current, upcoming) {
+        if (!current && upcoming.length === 0) {
+            this.renderListMessage('Your queue is empty. Add songs with + in search or Recent.');
+            return;
+        }
+        const heading = text => {
+            const element = document.createElement('h3');
+            element.className = 'settings-heading';
+            element.textContent = text;
+            return element;
+        };
+        const queueRow = (track, onSelect) => this.buildRow({
+            art: track.album_art,
+            title: track.name,
+            meta: track.artists.join(', '),
+            uri: track.uri,
+            onSelect
+        });
+
+        const children = [];
+        if (current) {
+            children.push(heading('Now playing'), queueRow(current, () => this.closeLibrary()));
+        }
+        if (upcoming.length > 0) {
+            children.push(heading('Next up'));
+            upcoming.forEach((track, index) => children.push(queueRow(track, () => this.skipAhead(index + 1))));
+        }
+        this.el.libraryList.replaceChildren(...children);
+        // Only the song playing now should be green, not later repeats of it
+        this.el.libraryList.querySelectorAll('.row').forEach((row, index) => {
+            row.classList.toggle('playing', Boolean(current) && index === 0);
+        });
+        this.el.libraryList.scrollTop = 0;
+    }
+
+    async addToQueue(uri, name) {
+        try {
+            await this.postJson('/api/queue/add', { track_uri: uri });
+            this.showToast(`Added ${name} to queue`);
+        } catch (error) {
+            console.error('Add to queue error:', error);
+            this.showToast(/NO_ACTIVE_DEVICE|No active device/i.test(error.message)
+                ? 'Start playing something first'
+                : "Couldn't add to queue");
+        }
+    }
+
+    // There's no "play this queue item" API, so skip forward one song at a time
+    async skipAhead(count) {
+        this.closeLibrary();
+        try {
+            for (let i = 0; i < count; i++) {
+                await this.postJson('/next-track');
+            }
+        } catch (error) {
+            console.error('Skip ahead error:', error);
+            this.showToast("Couldn't skip ahead");
+        }
     }
 
     describeItem(item, kind) {
@@ -800,10 +1014,126 @@ class VinylPlayer {
     }
 
     highlightPlayingRows() {
+        if (this.libraryTab === 'queue' && !this.el.searchInput.value.trim()) return;
         const playing = [this.track?.uri, this.track?.contextUri].filter(Boolean);
         this.el.libraryList.querySelectorAll('.row[data-uri]').forEach(row => {
             row.classList.toggle('playing', playing.includes(row.dataset.uri));
         });
+    }
+
+    // ---------- Settings ----------
+
+    renderSettings() {
+        const groups = SETTINGS_SCHEMA.map(group => {
+            const section = document.createElement('section');
+            section.className = 'settings-group';
+            section.innerHTML = `<h3 class="settings-heading">${escapeHtml(group.section)}</h3>`;
+            group.items.forEach(item => section.appendChild(this.renderSettingRow(item)));
+            return section;
+        });
+
+        const reset = document.createElement('button');
+        reset.type = 'button';
+        reset.className = 'settings-reset';
+        reset.textContent = 'Reset to defaults';
+        reset.addEventListener('click', () => {
+            this.settings = { ...DEFAULT_SETTINGS };
+            saveSettings(this.settings);
+            this.applySettings();
+            this.renderSettings();
+            this.showToast('Settings reset');
+        });
+
+        this.el.libraryList.replaceChildren(...groups, reset);
+    }
+
+    renderSettingRow(item) {
+        const row = document.createElement('div');
+        row.className = `setting setting-${item.type}`;
+        const description = item.description ? `<span class="setting-description">${escapeHtml(item.description)}</span>` : '';
+        row.innerHTML = `<span class="setting-text"><span class="setting-label">${escapeHtml(item.label)}</span>${description}</span>`;
+
+        if (item.type === 'toggle') {
+            const toggle = document.createElement('button');
+            toggle.type = 'button';
+            toggle.className = 'switch';
+            toggle.setAttribute('role', 'switch');
+            toggle.setAttribute('aria-label', item.label);
+            toggle.setAttribute('aria-checked', String(this.settings[item.key]));
+            toggle.addEventListener('click', () => {
+                this.updateSetting(item.key, !this.settings[item.key]);
+                toggle.setAttribute('aria-checked', String(this.settings[item.key]));
+            });
+            row.appendChild(toggle);
+        } else {
+            const choices = document.createElement('div');
+            choices.className = 'segmented';
+            choices.setAttribute('role', 'radiogroup');
+            choices.setAttribute('aria-label', item.label);
+            item.options.forEach(([value, label]) => {
+                const option = document.createElement('button');
+                option.type = 'button';
+                option.textContent = label;
+                option.setAttribute('role', 'radio');
+                option.setAttribute('aria-checked', String(this.settings[item.key] === value));
+                option.addEventListener('click', () => {
+                    this.updateSetting(item.key, value);
+                    choices.querySelectorAll('button').forEach(other => {
+                        other.setAttribute('aria-checked', String(other === option));
+                    });
+                });
+                choices.appendChild(option);
+            });
+            row.appendChild(choices);
+        }
+        return row;
+    }
+
+    updateSetting(key, value) {
+        this.settings[key] = value;
+        saveSettings(this.settings);
+        this.applySettings();
+    }
+
+    // Most settings are plain CSS hooks on the player; the rest are read where they're used
+    applySettings() {
+        const { player } = this.el;
+        const s = this.settings;
+        player.dataset.lyricsBackground = s.lyricsBackground;
+        player.dataset.lyricsSize = s.lyricsSize;
+        player.dataset.ringColor = s.ringColor;
+        player.classList.toggle('lyrics-focus', !s.lyricsContext);
+        player.classList.toggle('no-texture', !s.vinylTexture);
+        player.classList.toggle('no-progress', !s.showProgress);
+        player.classList.toggle('no-clock', !s.idleClock);
+        this.refreshSongInfoFade();
+        this.wakeControls();
+        // Text size changes line heights, so re-centre the current line
+        requestAnimationFrame(() => this.renderLyricPosition(true));
+    }
+
+    // With "Fade song info" on, the title and artist fade out 5s after the cover appears
+    refreshSongInfoFade() {
+        clearTimeout(this.songInfoTimer);
+        this.el.player.classList.remove('song-info-faded');
+        if (this.settings.fadeSongInfo && this.isPlaying && this.view === 'art') {
+            this.songInfoTimer = setTimeout(() => this.el.player.classList.add('song-info-faded'), AUTO_HIDE_MS);
+        }
+    }
+
+    // With "Auto-hide buttons" on, buttons fade out after 5s without a touch while playing
+    wakeControls() {
+        clearTimeout(this.controlsTimer);
+        this.el.player.classList.remove('controls-hidden');
+        if (this.settings.autoHideControls && this.isPlaying && !this.isLibraryOpen()) {
+            this.controlsTimer = setTimeout(() => this.el.player.classList.add('controls-hidden'), AUTO_HIDE_MS);
+        }
+    }
+
+    updateClock() {
+        const now = new Date();
+        this.el.idleTime.textContent = now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+        this.el.idleDate.textContent = now.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
     }
 
     // ---------- Feedback & keyboard ----------
