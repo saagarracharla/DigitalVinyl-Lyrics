@@ -113,6 +113,18 @@ Playlists start in shuffle. On a keyboard: Space plays or pauses, ← / → skip
 - **Lyrics Sync**: Millisecond-accurate timing with LRCLib
 - **Circular Design**: Optimized for 1080x1080 circular displays
 
+## Testing
+
+End-to-end UI tests run the real page in headless Chrome against a fake Spotify backend (`tests/ui/mock.js`), so they never touch your Spotify account. They cover playback controls, tap and drag gestures, lyrics, the library, search, the queue, every setting, error messages and keyboard shortcuts.
+
+```bash
+source .venv/bin/activate
+python tests/ui/serve.py &        # UI with the fake backend on http://127.0.0.1:5099
+node tests/ui/run-tests.mjs       # needs Node 22+ and Google Chrome
+```
+
+Screenshots of each screen are saved to `tests/ui/shots/`. Set `CHROME_PATH` if Chrome isn't in the default macOS location.
+
 ## License
 
 MIT License - feel free to use and modify!

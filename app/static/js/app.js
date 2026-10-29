@@ -402,8 +402,9 @@ class VinylPlayer {
         this.lyricIndex = -1;
         this.el.lyricsLines.innerHTML = '';
 
-        // Each new record starts on its cover, then moves to lyrics (unless turned off in Settings)
-        if (!this.settings.autoLyrics) this.showLyrics = false;
+        // Each new record starts on its cover. With "Show lyrics automatically" on it moves to
+        // lyrics after the intro; tapping only changes the view for the current song.
+        this.showLyrics = this.settings.autoLyrics;
         this.introUntil = performance.now() + ART_INTRO_MS;
         clearTimeout(this.introTimer);
         this.introTimer = setTimeout(() => this.updateView(), ART_INTRO_MS);
@@ -746,7 +747,6 @@ class VinylPlayer {
                     .catch(error => console.warn('Shuffle failed:', error));
             }
             await this.postJson('/api/play', { type: item.kind, id: item.id, device_id: deviceId });
-            this.showLyrics = true;
             this.closeLibrary();
         } catch (error) {
             console.error('Play error:', error);
