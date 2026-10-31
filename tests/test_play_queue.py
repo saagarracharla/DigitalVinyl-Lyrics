@@ -118,6 +118,16 @@ class PlayQueueTest(unittest.TestCase):
         q.set_shuffle(False)
         self.assertEqual(names(q.context_queue), ['t3', 't4', 't5', 't6', 't7'])
 
+    def test_shuffle_off_resumes_after_the_current_song_even_if_history_is_out_of_date(self):
+        q = PlayQueue(shuffle=True, rng=random.Random(3))
+        q.load(tracks(10), start_index=0)
+        q._last_context_index = 7          # out of date
+        target = next(e for e in q.context_queue if e['index'] == 2)
+        q.jump(target['uid'])
+        q._last_context_index = 7
+        q.set_shuffle(False)
+        self.assertEqual(names(q.context_queue), ['t3', 't4', 't5', 't6', 't7', 't8', 't9'])
+
     def test_repeat_playlist_starts_over(self):
         q = PlayQueue(repeat='context')
         q.load(tracks(2))
@@ -317,7 +327,7 @@ class SpotifyServiceQueueTest(unittest.TestCase):
         self.assertTrue(data['shuffle'])
         self.assertNotEqual([t['id'] for t in data['next_from'][:10]], [f't{i}' for i in range(1, 11)])
         self.service.set_repeat('track')
-        self.sp.repeat.assert_called_with('track')
+        self.sp.repeat.assert_called_with('track', device_id='dev')
         self.assertIn('error', self.service.set_repeat('sometimes').get_json())
 
 

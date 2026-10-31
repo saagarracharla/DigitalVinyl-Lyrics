@@ -513,7 +513,7 @@ class SpotifyService:
                     self.sp.repeat(state)
                     return jsonify({'success': True, 'repeat': state})
                 # The device repeats the playlist itself; Spotify only handles repeating one song
-                self.sp.repeat('track' if state == 'track' else 'off')
+                self.sp.repeat('track' if state == 'track' else 'off', device_id=self.device_id)
                 self.queue.set_repeat(state)
                 self._resync_after_edit()
                 return jsonify(self.queue.to_json())

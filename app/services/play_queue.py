@@ -206,7 +206,9 @@ class PlayQueue:
         original order after the last playlist track played. "Next in queue" is untouched."""
         self.shuffle = bool(state)
         if self.source:
-            self.context_queue = self._context_after(self._last_context_index)
+            current = self.current or {}
+            index = current['index'] if current.get('origin') == 'context' and 'index' in current else self._last_context_index
+            self.context_queue = self._context_after(index)
 
     def set_repeat(self, mode):
         if mode not in REPEAT_MODES:
