@@ -74,7 +74,8 @@ class SpotifyService:
                 'progress_ms': playback['progress_ms'],
                 'duration_ms': track['duration_ms'],
                 'is_playing': playback['is_playing'],
-                'album_art': images[0]['url'] if images else None
+                'album_art': images[0]['url'] if images else None,
+                'album': track['album'].get('name')
             })
         except Exception as e:
             return jsonify({'error': str(e), 'is_playing': False})

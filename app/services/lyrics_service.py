@@ -1,5 +1,6 @@
 import json
 import os
+import random
 import re
 import sqlite3
 import threading
@@ -20,9 +21,14 @@ CACHE_FILE = os.path.join(os.path.dirname(__file__), '..', '..', '.lyrics_cache.
 # LRCLib keeps adding lyrics, so "no lyrics" is only remembered for a while
 NO_LYRICS_RECHECK_S = 7 * 24 * 3600
 
+# LRCLib asks clients to name themselves: app name, version and a link (https://lrclib.net/docs)
+USER_AGENT = 'DigitalVinyl v1.0 (https://github.com/saagarracharla/DigitalVinyl-Lyrics)'
+
 # LRCLib often answers 429/5xx under load; a quick retry usually succeeds
 RETRY_DELAYS_S = (0.5, 1.5)
 RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+# A Retry-After up to this long is waited out within the request; longer ones pause lookups
+MAX_INLINE_WAIT_S = 3
 
 # When LRCLib keeps failing it's usually down for a while; pause before trying again rather
 # than sending it more requests. The pause doubles with each failure, up to the maximum.
@@ -34,7 +40,7 @@ class LyricsService:
     def __init__(self, cache_file=CACHE_FILE):
         self.base_url = "https://lrclib.net/api"
         self.session = requests.Session()
-        self.session.headers['User-Agent'] = 'DigitalVinyl (https://github.com/saagarracharla)'
+        self.session.headers['User-Agent'] = USER_AGENT
         self._lock = threading.Lock()
         self._db = sqlite3.connect(cache_file, check_same_thread=False)
         self._db.execute('CREATE TABLE IF NOT EXISTS lyrics (key TEXT PRIMARY KEY, lines TEXT NOT NULL, fetched_at REAL NOT NULL)')
@@ -42,8 +48,8 @@ class LyricsService:
         self._paused_until = 0
         self._failures = 0
 
-    def get_lyrics(self, track, artist, duration_ms=None):
-        """Get synced lyrics for a track, matching on duration when it's known."""
+    def get_lyrics(self, track, artist, duration_ms=None, album=None):
+        """Get synced lyrics for a track, matching on duration (and album) when known."""
         duration_s = round(duration_ms / 1000) if duration_ms else None
         key = '\x00'.join([track.lower(), artist.lower(), str(duration_s)])
 
@@ -55,12 +61,15 @@ class LyricsService:
         if wait > 0:
             return self._unavailable(wait)
         try:
-            lines = self._fetch(track, artist, duration_s)
+            lines = self._fetch(track, artist, duration_s, album)
         except Exception as e:
             # Don't cache failures, and report them as errors so the client retries
             # instead of deciding the song has no lyrics
             self._failures += 1
             pause = min(OUTAGE_PAUSE_S * 2 ** (self._failures - 1), OUTAGE_PAUSE_MAX_S)
+            # Never come back sooner than LRCLib asked; jitter keeps clients from retrying in sync
+            pause = max(pause, getattr(e, 'retry_after', 0)) * random.uniform(1, 1.3)
+            pause = round(pause)
             self._paused_until = time.monotonic() + pause
             print(f"Lyrics error: {e} (pausing lookups for {pause}s)")
             return self._unavailable(pause)
@@ -89,24 +98,52 @@ class LyricsService:
             self._db.execute('INSERT OR REPLACE INTO lyrics VALUES (?, ?, ?)', (key, json.dumps(lines), time.time()))
             self._db.commit()
 
-    def _fetch(self, track, artist, duration_s):
-        for delay in (*RETRY_DELAYS_S, None):
+    def _fetch(self, track, artist, duration_s, album=None):
+        if duration_s:
+            # /api/get is LRCLib's direct lookup: one record matching the length within ±2s
+            params = {'track_name': track, 'artist_name': artist, 'duration': duration_s}
+            if album:
+                params['album_name'] = album
+            response = self._request('/get', params)
+            if response.status_code == 200:
+                record = response.json()
+                if record.get('instrumental'):
+                    return []
+                if record.get('syncedLyrics'):
+                    return self._parse_lrc_content(record['syncedLyrics'])
+            elif response.status_code != 404:
+                response.raise_for_status()
+        # Not found that way (titles often differ, e.g. "(feat. ...)"), so search more loosely
+        response = self._request('/search', {'artist_name': artist, 'track_name': track})
+        response.raise_for_status()
+        best = self._pick_best_match(response.json(), duration_s)
+        return self._parse_lrc_content(best['syncedLyrics']) if best else []
+
+    def _request(self, path, params):
+        """GET from LRCLib, retrying brief failures and honouring Retry-After as its docs require."""
+        for attempt, delay in enumerate((*RETRY_DELAYS_S, None)):
             try:
-                response = self.session.get(
-                    f"{self.base_url}/search",
-                    params={'artist_name': artist, 'track_name': track},
-                    timeout=10,
-                )
-                if response.status_code not in RETRYABLE_STATUS or delay is None:
-                    break
+                response = self.session.get(f"{self.base_url}{path}", params=params, timeout=10)
             except requests.RequestException:
                 if delay is None:
                     raise
-            time.sleep(delay)
-        response.raise_for_status()
+                time.sleep(delay * random.uniform(1, 1.3))
+                continue
+            if response.status_code not in RETRYABLE_STATUS:
+                return response
+            retry_after = self._retry_after(response)
+            if delay is None or retry_after > MAX_INLINE_WAIT_S:
+                error = requests.HTTPError(f"{response.status_code} from LRCLib", response=response)
+                error.retry_after = retry_after
+                raise error
+            time.sleep(max(delay, retry_after) * random.uniform(1, 1.3))
 
-        best = self._pick_best_match(response.json(), duration_s)
-        return self._parse_lrc_content(best['syncedLyrics']) if best else []
+    @staticmethod
+    def _retry_after(response):
+        try:
+            return float(response.headers.get('Retry-After', 0))
+        except (TypeError, ValueError):
+            return 0
 
     def _pick_best_match(self, results, duration_s):
         synced = [r for r in results if r.get('syncedLyrics') and not r.get('instrumental')]

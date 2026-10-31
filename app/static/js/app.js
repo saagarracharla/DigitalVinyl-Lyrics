@@ -358,6 +358,7 @@ class VinylPlayer {
                 artist: data.artist,
                 artists: data.artists || data.artist,
                 art: data.album_art,
+                album: data.album,
                 durationMs: data.duration_ms,
                 positionMs: data.progress_ms,
                 isPlaying: data.is_playing,
@@ -378,6 +379,7 @@ class VinylPlayer {
             artist: track.artists[0]?.name || 'Unknown Artist',
             artists: track.artists.map(artist => artist.name).join(', '),
             art: images[0]?.url,
+            album: track.album?.name,
             durationMs: state.duration,
             positionMs: state.position,
             isPlaying: !state.paused,
@@ -544,6 +546,9 @@ class VinylPlayer {
             const params = new URLSearchParams({ track: track.name, artist: track.artist });
             if (track.durationMs) {
                 params.set('duration_ms', track.durationMs);
+            }
+            if (track.album) {
+                params.set('album', track.album);
             }
             const response = await fetch(`/lyrics?${params}`);
             if (!response.ok) {

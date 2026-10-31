@@ -26,11 +26,12 @@ def create_app():
         track = request.args.get('track')
         artist = request.args.get('artist')
         duration_ms = request.args.get('duration_ms', type=int)
+        album = request.args.get('album')
         
         if not track or not artist:
             return jsonify({'lines': []})
         
-        return lyrics_service.get_lyrics(track, artist, duration_ms)
+        return lyrics_service.get_lyrics(track, artist, duration_ms, album)
     
     @app.route('/play-pause', methods=['POST'])
     def play_pause():
