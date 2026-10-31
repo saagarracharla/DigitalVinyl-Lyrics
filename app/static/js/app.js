@@ -11,6 +11,7 @@ const ART_INTRO_MS = 4000;                 // show the cover this long before ly
 const SEEK_SETTLE_MS = 2000;               // after seeking, ignore stale positions for this long
 const SYNC_INTERVAL_MS = 1000;
 const TOAST_MS = 2600;
+const LYRICS_RETRY_MS = [3000, 8000, 20000]; // wait before each retry when the lyrics service fails
 const AUTO_HIDE_MS = 5000;                 // song info / buttons fade after this long, when enabled
 
 const SPIN_PERIOD_MS = { slow: 40000, normal: 20000, fast: 10000 };   // time for one full turn
@@ -162,6 +163,8 @@ class VinylPlayer {
 
         // Lyrics
         this.lyrics = [];
+        this.lyricsStatus = 'none';        // loading | ready | none | error
+        this.lyricsRetryTimer = null;
         this.lyricIndex = -1;
         this.showLyrics = true;
         this.introUntil = 0;
@@ -409,7 +412,7 @@ class VinylPlayer {
         clearTimeout(this.introTimer);
         this.introTimer = setTimeout(() => this.updateView(), ART_INTRO_MS);
 
-        this.fetchLyrics(track);
+        this.fetchLyrics(track, 0);
         this.highlightPlayingRows();
         this.refreshSongInfoFade();
         if (this.isLibraryOpen() && this.libraryTab === 'queue' && !this.el.searchInput.value.trim()) {
@@ -421,6 +424,8 @@ class VinylPlayer {
         if (!this.track) return;
         this.track = null;
         this.lyrics = [];
+        this.lyricsStatus = 'none';
+        clearTimeout(this.lyricsRetryTimer);
         this.el.lyricsLines.innerHTML = '';
         this.setPlaying(false);
     }
@@ -494,32 +499,45 @@ class VinylPlayer {
 
     // ---------- Lyrics ----------
 
-    async fetchLyrics(track) {
+    async fetchLyrics(track, attempt) {
+        clearTimeout(this.lyricsRetryTimer);
+        this.lyricsStatus = 'loading';
+        let data;
         try {
             const params = new URLSearchParams({ track: track.name, artist: track.artist });
             if (track.durationMs) {
                 params.set('duration_ms', track.durationMs);
             }
             const response = await fetch(`/lyrics?${params}`);
-            const data = await response.json();
-
-            // The track may have changed while this was loading
-            if (this.track !== track) return;
-
-            this.lyrics = data.lines || [];
-            this.lyricIndex = -1;
-            this.el.lyricsLines.replaceChildren(...this.lyrics.map(line => {
-                const element = document.createElement('div');
-                element.className = 'lyric-line upcoming';
-                element.textContent = line.words;
-                return element;
-            }));
-            this.syncLyric(this.currentPositionMs());
-            this.renderLyricPosition(true);
-            this.updateView();
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            data = await response.json();
         } catch (error) {
-            console.error('Lyrics error:', error);
+            if (this.track !== track) return;
+            // A failed request doesn't mean the song has no lyrics, so try again shortly
+            console.warn('Lyrics error:', error);
+            if (attempt < LYRICS_RETRY_MS.length) {
+                this.lyricsRetryTimer = setTimeout(() => this.fetchLyrics(track, attempt + 1), LYRICS_RETRY_MS[attempt]);
+            } else {
+                this.lyricsStatus = 'error';
+            }
+            return;
         }
+
+        // The track may have changed while this was loading
+        if (this.track !== track) return;
+
+        this.lyrics = data.lines || [];
+        this.lyricsStatus = this.lyrics.length > 0 ? 'ready' : 'none';
+        this.lyricIndex = -1;
+        this.el.lyricsLines.replaceChildren(...this.lyrics.map(line => {
+            const element = document.createElement('div');
+            element.className = 'lyric-line upcoming';
+            element.textContent = line.words;
+            return element;
+        }));
+        this.syncLyric(this.currentPositionMs());
+        this.renderLyricPosition(true);
+        this.updateView();
     }
 
     findLyricIndex(positionMs) {
@@ -653,7 +671,16 @@ class VinylPlayer {
             return;
         }
         if (this.lyrics.length === 0) {
-            this.showToast('No lyrics for this song');
+            // Switch to lyrics as soon as they arrive
+            if (this.lyricsStatus !== 'none') this.showLyrics = true;
+            if (this.lyricsStatus === 'loading') {
+                this.showToast('Finding lyrics…');
+            } else if (this.lyricsStatus === 'error') {
+                this.showToast('Lyrics unavailable, trying again…');
+                this.fetchLyrics(this.track, 0);
+            } else {
+                this.showToast('No lyrics for this song');
+            }
             return;
         }
         this.showLyrics = this.view !== 'lyrics';

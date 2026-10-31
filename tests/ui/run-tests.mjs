@@ -213,6 +213,17 @@ async function run() {
     await tap(...DISC_TAP);
     check('tap a paused record → resumes', await waitFor(`calls('/play-pause').length === 2 && P.classList.contains('is-playing')`, 2000));
 
+    // ---------- Lyrics service failures ----------
+    await js(`clearCalls(); __mock.lyricsFail = 1; __mock.track = 'A'; __mock.positionMs = 20000; __mock.at = Date.now();`);
+    await waitFor(`$('#trackTitle').textContent === 'Song A'`);
+    check('lyrics request fails → retried, lyrics appear without changing song', await waitFor(`calls('/lyrics').length === 2 && view() === 'lyrics'`, 8000), await js(`return [calls('/lyrics').length, view()];`));
+    await js(`__mock.lyricsDelayMs = 2500; __mock.track = 'B'; __mock.positionMs = 20000; __mock.at = Date.now();`);
+    await waitFor(`$('#trackTitle').textContent === 'Song B'`);
+    await tap(...DISC_TAP);
+    check('tap while lyrics are loading → "Finding lyrics…", not "No lyrics"', await waitFor(`$('#toast').classList.contains('visible') && $('#toast').textContent === 'Finding lyrics…'`, 1500), await js(`return $('#toast').textContent;`));
+    check('lyrics show once loaded', await waitFor(`view() === 'lyrics'`, 7000));
+    await js(`__mock.lyricsDelayMs = 0;`);
+
     // ---------- Drag to seek ----------
     await js(`__mock.track = 'A'; __mock.positionMs = 60000; __mock.at = Date.now(); __mock.queue = ['B','C','D'];`);
     await waitFor(`$('#trackTitle').textContent === 'Song A'`);

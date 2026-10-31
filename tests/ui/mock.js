@@ -3,7 +3,7 @@
 window.__calls = [];
 window.__mock = {
     track: 'A', playing: true, positionMs: 20000, at: Date.now(),
-    queue: ['B', 'C', 'D'], failNext: null, lyricsFor: { A: true, B: true, C: false, D: true },
+    queue: ['B', 'C', 'D'], failNext: null, lyricsFail: 0, lyricsDelayMs: 0, lyricsFor: { A: true, B: true, C: false, D: true },
 };
 const art = color => `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="64" height="64" fill="${color}"/></svg>`)}`;
 const MOCK_TRACKS = {
@@ -42,6 +42,9 @@ window.fetch = async (url, options = {}) => {
                 context_uri: m.context || null, progress_ms: position(), duration_ms: t.duration_ms, is_playing: m.playing, album_art: t.album.images[0].url });
         }
         case '/lyrics': {
+            if (m.lyricsDelayMs) await new Promise(r => setTimeout(r, m.lyricsDelayMs));
+            // Simulates the lyrics service being down for the next N requests
+            if (m.lyricsFail > 0) { m.lyricsFail--; return json({ lines: [], error: 'Lyrics are unavailable right now' }, 502); }
             const name = u.searchParams.get('track');
             const id = Object.keys(MOCK_TRACKS).find(k => MOCK_TRACKS[k].name === name);
             if (!m.lyricsFor[id]) return json({ lines: [] });

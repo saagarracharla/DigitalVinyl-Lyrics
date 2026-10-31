@@ -1,5 +1,6 @@
 from flask import jsonify
 import re
+import time
 import requests
 
 # Matches one LRC timestamp, e.g. [01:23.45]. Metadata tags like [ar:Artist] don't match.
@@ -10,6 +11,10 @@ TIMESTAMP_RE = re.compile(r'\[(\d+):(\d+(?:\.\d+)?)\]')
 DURATION_TOLERANCE_S = 3
 
 CACHE_MAX_ENTRIES = 500
+
+# LRCLib often answers 429/5xx under load; a quick retry usually succeeds
+RETRY_DELAYS_S = (0.5, 1.5)
+RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 
 
 class LyricsService:
@@ -28,9 +33,10 @@ class LyricsService:
             try:
                 lines = self._fetch(track, artist, duration_s)
             except Exception as e:
-                # Don't cache network errors or rate limits, so the next request retries
+                # Don't cache failures, and report them as errors so the client retries
+                # instead of deciding the song has no lyrics
                 print(f"Lyrics error: {e}")
-                return jsonify({'lines': []})
+                return jsonify({'lines': [], 'error': 'Lyrics are unavailable right now'}), 502
 
             if len(self._cache) >= CACHE_MAX_ENTRIES:
                 self._cache.pop(next(iter(self._cache)))
@@ -39,11 +45,19 @@ class LyricsService:
         return jsonify({'lines': self._cache[key]})
 
     def _fetch(self, track, artist, duration_s):
-        response = self.session.get(
-            f"{self.base_url}/search",
-            params={'artist_name': artist, 'track_name': track},
-            timeout=10,
-        )
+        for delay in (*RETRY_DELAYS_S, None):
+            try:
+                response = self.session.get(
+                    f"{self.base_url}/search",
+                    params={'artist_name': artist, 'track_name': track},
+                    timeout=10,
+                )
+                if response.status_code not in RETRYABLE_STATUS or delay is None:
+                    break
+            except requests.RequestException:
+                if delay is None:
+                    raise
+            time.sleep(delay)
         response.raise_for_status()
 
         best = self._pick_best_match(response.json(), duration_s)
