@@ -19,7 +19,7 @@ A beautiful circular Spotify player that brings the classic vinyl experience to 
 - **Settings**: lyrics background (album colour, spinning cover or black), text size, current-line-only lyrics, fading song info, auto-hiding buttons, spin speed, scrub speed, progress ring style, idle clock and more. Saved on the device.
 - **Spotify Connect device**: shows up in Spotify as **Digital Vinyl**. It also follows music playing on your other devices.
 - **Made for round screens**: designed at 1080×1080 and scales to any square window.
-- **Free lyrics**: from [LRCLib](https://lrclib.net), no API key needed.
+- **Free lyrics**: from [LRCLib](https://lrclib.net), no API key needed. Lyrics are saved on disk (`.lyrics_cache.sqlite3`), so songs you've heard before still have lyrics when LRCLib is down. During an outage the server pauses lookups and the page keeps retrying while the song plays.
 
 ## Requirements
 

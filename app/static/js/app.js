@@ -11,7 +11,9 @@ const ART_INTRO_MS = 4000;                 // show the cover this long before ly
 const SEEK_SETTLE_MS = 2000;               // after seeking, ignore stale positions for this long
 const SYNC_INTERVAL_MS = 1000;
 const TOAST_MS = 2600;
-const LYRICS_RETRY_MS = [3000, 8000, 20000]; // wait before each retry when the lyrics service fails
+// Wait before each retry when the lyrics service fails; the last one repeats for as long as the song plays
+const LYRICS_RETRY_MS = [3000, 8000, 20000, 30000, 60000];
+const LYRICS_GIVE_UP_AFTER = 3;            // after this many failures, a tap says lyrics are unavailable
 const AUTO_HIDE_MS = 5000;                 // song info / buttons fade after this long, when enabled
 
 const SPIN_PERIOD_MS = { slow: 40000, normal: 20000, fast: 10000 };   // time for one full turn
@@ -536,7 +538,7 @@ class VinylPlayer {
 
     async fetchLyrics(track, attempt) {
         clearTimeout(this.lyricsRetryTimer);
-        this.lyricsStatus = 'loading';
+        if (attempt < LYRICS_GIVE_UP_AFTER) this.lyricsStatus = 'loading';
         let data;
         try {
             const params = new URLSearchParams({ track: track.name, artist: track.artist });
@@ -544,17 +546,20 @@ class VinylPlayer {
                 params.set('duration_ms', track.durationMs);
             }
             const response = await fetch(`/lyrics?${params}`);
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            if (!response.ok) {
+                const error = new Error(`HTTP ${response.status}`);
+                // The server says when the lyrics service is worth asking again
+                error.retryAfterMs = 1000 * (Number(response.headers.get('Retry-After')) || 0);
+                throw error;
+            }
             data = await response.json();
         } catch (error) {
             if (this.track !== track) return;
-            // A failed request doesn't mean the song has no lyrics, so try again shortly
-            console.warn('Lyrics error:', error);
-            if (attempt < LYRICS_RETRY_MS.length) {
-                this.lyricsRetryTimer = setTimeout(() => this.fetchLyrics(track, attempt + 1), LYRICS_RETRY_MS[attempt]);
-            } else {
-                this.lyricsStatus = 'error';
-            }
+            // A failed request doesn't mean the song has no lyrics, so keep trying while it plays
+            console.warn('Lyrics error:', error.message);
+            const delay = Math.max(LYRICS_RETRY_MS[Math.min(attempt, LYRICS_RETRY_MS.length - 1)], error.retryAfterMs || 0);
+            this.lyricsRetryTimer = setTimeout(() => this.fetchLyrics(track, attempt + 1), delay);
+            if (attempt + 1 >= LYRICS_GIVE_UP_AFTER) this.lyricsStatus = 'error';
             return;
         }
 
