@@ -225,7 +225,7 @@ async function run() {
     await js(`__mock.lyricsDelayMs = 0;`);
 
     // ---------- Drag to seek ----------
-    await js(`__mock.track = 'A'; __mock.positionMs = 60000; __mock.at = Date.now(); __mock.queue = ['B','C','D'];`);
+    await js(`__mock.track = 'A'; __mock.positionMs = 60000; __mock.at = Date.now(); __setQueue(['B','C','D']);`);
     await waitFor(`$('#trackTitle').textContent === 'Song A'`);
     await sleep(500);
     let before = await js(`return pos();`);
@@ -285,24 +285,78 @@ async function run() {
 
     // ---------- Queue ----------
     await openTab('queue');
-    check('queue shows Now playing + Next up', await js(`return $$('#libraryList .settings-heading').map(h => h.textContent).join();`) === 'Now playing,Next up');
-    check('queue contents incl. added song', await js(`return titles().join('|');`) === 'Song A|Song B|Song C <b>bold</b>|Song D|Song C <b>bold</b>', await js(`return titles();`));
+    const headings = () => js(`return $$('#libraryList .settings-heading').map(h => h.textContent).join();`);
+    check('queue: Now playing, Next in queue, Next up', await headings() === 'Now playing,Next in queue,Next up', await headings());
+    check('added song plays before the rest', await js(`return titles().join('|');`) === 'Song A|Song C <b>bold</b>|Song B|Song C <b>bold</b>|Song D', await js(`return titles();`));
     check('only now playing is green; no + in queue', await js(`return $$('#libraryList .row.playing').length === 1 && $$('#libraryList .row')[0].classList.contains('playing') && !$('#libraryList .row-add');`));
+    check('queued songs have remove and drag handles; now playing does not', await js(`return $$('#libraryList .row-remove').length === 4 && $$('#libraryList .row-handle').length === 4 && !$$('#libraryList .row')[0].querySelector('.row-remove');`));
     await shot('06-queue');
+
+    // Drag the last song (Song D) to the top of its section
+    await js(`clearCalls();`);
+    const handles = await js(`const h = $$('.queue-section')[1].querySelectorAll('.row-handle'); $$('.queue-section')[1].scrollIntoView({ block: 'center' }); return h.length;`);
+    await sleep(200);
+    const [hx, hy] = await js(`const r = $$('.queue-section')[1].querySelectorAll('.row-handle')[${handles - 1}].getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2];`);
+    const [, topY] = await js(`const r = $$('.queue-section')[1].querySelector('.row').getBoundingClientRect(); return [0, r.top + 4];`);
+    await mouse('mouseMoved', hx, hy, 0);
+    await mouse('mousePressed', hx, hy);
+    for (let i = 1; i <= 12; i++) { await mouse('mouseMoved', hx, hy + (topY - hy) * i / 12); await sleep(16); }
+    const midDrag = await js(`return $$('.row.dragging').length;`);
+    await mouse('mouseReleased', hx, topY, 0);
+    check('drag a song by its handle → moved to the top', midDrag === 1 && await waitFor(`calls('/api/queue/move').length === 1 && calls('/api/queue/move')[0].body.index === 0`, 2000)
+        && await waitFor(`titles().slice(2).join('|') === 'Song D|Song B|Song C <b>bold</b>'`, 2000), await js(`return [calls('/api/queue/move')[0]?.body, titles()];`));
+    check('drag did not seek or close the library', await js(`return calls('/seek').length === 0 && P.classList.contains('library-open');`));
+
+    await js(`clearCalls(); $$('.queue-section')[1].querySelectorAll('.row-remove')[1].click();`);
+    check('remove a song', await waitFor(`calls('/api/queue/remove').length === 1 && titles().slice(2).join('|') === 'Song D|Song C <b>bold</b>'`, 2000), await js(`return [titles(), __calls.filter(c => c.path.startsWith('/api/queue/')).map(c => c.path + ' ' + JSON.stringify(c.body)), __mock.from, __mock.user];`));
+    await js(`clearCalls(); $('.queue-clear').click();`);
+    check('Clear queue empties "Next in queue" only', await waitFor(`calls('/api/queue/clear').length === 1 && !$('.queue-clear')`, 2000) && await headings() === 'Now playing,Next up' && await js(`return titles().length === 3;`));
+    await js(`clearCalls(); $$('.queue-section')[0].querySelectorAll('.row-main')[1].click();`);
+    check('tap a queued song → plays it now, library closes', await waitFor(`calls('/api/queue/play').length === 1 && !P.classList.contains('library-open') && $('#trackTitle').textContent === 'Song C <b>bold</b>'`));
+    check('track change reported to the server', await waitFor(`calls('/api/now-playing').some(c => c.body.uri === 'spotify:track:C')`, 3000));
+    await openTab('queue');
+    check('songs before it were skipped', await js(`return titles().join('|');`) === 'Song C <b>bold</b>');
+
+    // Queue started on another device: shown read-only, like before
+    await js(`__mock.queueActive = false; __setQueue(['B','D']);`);
+    await openTab('playlists');
+    await openTab('queue');
+    check('queue from another device: read-only with a note', await waitFor(`titles().length === 3`, 2000) && await js(`return !$('.row-remove') && !$('.row-handle') && $('.queue-note')?.textContent.startsWith('Started on another device');`));
     await js(`clearCalls(); $$('#libraryList .row-main')[2].click();`);
-    check('tap 2nd queued song → skips twice, closes library', await waitFor(`calls('/next-track').length === 2 && !P.classList.contains('library-open') && $('#trackTitle').textContent === 'Song C <b>bold</b>'`));
+    check('…and tapping a song skips ahead to it', await waitFor(`calls('/next-track').length === 2 && $('#trackTitle').textContent === 'Song D'`));
+    await js(`__mock.queueActive = true;`);
+
+    // ---------- Shuffle & repeat ----------
+    await closeLibrary();
+    check('shuffle and repeat buttons beside the transport', await js(`return ['#shuffleBtn', '#prevBtn', '#playPauseBtn', '#nextBtn', '#repeatBtn'].every(s => $(s).getBoundingClientRect().width > 0) && $('.transport').firstElementChild.id === 'shuffleBtn' && $('.transport').lastElementChild.id === 'repeatBtn';`));
+    check('buttons sit inside the circle', await js(`return ['#shuffleBtn', '#repeatBtn'].every(s => { const r = $(s).getBoundingClientRect(); const pts = [[r.left, r.top], [r.right, r.top], [r.left, r.bottom], [r.right, r.bottom]]; return pts.every(([x, y]) => Math.hypot(x - 540, y - 540) < 540); });`), await js(`return ['#shuffleBtn', '#repeatBtn'].map(s => { const r = $(s).getBoundingClientRect(); return [r.left, r.top, r.right, r.bottom].map(Math.round); });`));
+    await js(`clearCalls(); $('#shuffleBtn').click();`);
+    check('shuffle on → green, sent to server', await waitFor(`calls('/api/shuffle')[0]?.body.state === true && $('#shuffleBtn').getAttribute('aria-pressed') === 'true'`) && await js(`return getComputedStyle($('#shuffleBtn')).color;`) === 'rgb(30, 215, 96)');
+    await shot('06b-transport-shuffle-on');
+    await js(`$('#shuffleBtn').click();`);
+    check('shuffle off again', await waitFor(`calls('/api/shuffle')[1]?.body.state === false && $('#shuffleBtn').getAttribute('aria-pressed') === 'false'`));
+    const repeats = [];
+    for (let i = 0; i < 3; i++) {
+        await js(`$('#repeatBtn').click();`);
+        await waitFor(`calls('/api/repeat').length === ${i + 1}`);
+        await sleep(100);
+        repeats.push(await js(`return [$('#repeatBtn').dataset.repeat, getComputedStyle($('.repeat-one')).display];`));
+    }
+    check('repeat cycles all → one song → off (with a "1" on one song)', JSON.stringify(repeats) === JSON.stringify([['context', 'none'], ['track', 'block'], ['off', 'none']]), repeats);
 
     // ---------- Playing from the library ----------
     await openTab('playlists');
     await js(`clearCalls(); $$('#libraryList .row-main')[0].click();`);
-    check('playlist: shuffle then play, library closes', await waitFor(`calls('/api/play').length === 1`) && await js(`return calls('/api/shuffle')[0]?.body.state === true && calls('/api/play')[0].body.type === 'playlist' && !P.classList.contains('library-open');`));
+    check('playlist plays through the device queue, library closes', await waitFor(`calls('/api/play').length === 1`) && await js(`return calls('/api/shuffle').length === 0 && calls('/api/play')[0].body.type === 'playlist' && !P.classList.contains('library-open');`));
     await waitFor(`$('#trackTitle').textContent === 'Song A'`);
     await sleep(1200);
+    await openTab('queue');
+    check('queue shows "Next from: Road Trip"', await headings() === 'Now playing,Next from: Road Trip', await headings());
     await openTab('playlists');
     check('playing playlist highlighted green', await waitFor(`$$('#libraryList .row.playing .row-title').map(e => e.textContent).join() === 'Road Trip'`, 3000));
     await openTab('albums');
     await js(`clearCalls(); $$('#libraryList .row-main')[0].click();`);
-    check('album plays without shuffle', await waitFor(`calls('/api/play').length === 1`) && await js(`return calls('/api/shuffle').length === 0 && calls('/api/play')[0].body.type === 'album';`));
+    check('album plays', await waitFor(`calls('/api/play').length === 1`) && await js(`return calls('/api/play')[0].body.type === 'album';`));
 
     // ---------- Error handling ----------
     await openTab('recent');
@@ -329,7 +383,7 @@ async function run() {
     // ---------- Settings screen ----------
     await openTab('settings');
     check('settings screen: title, sections, search hidden', await js(`return $('#libraryTitle').textContent === 'Settings' && $$('.settings-heading').map(h => h.textContent).join() === 'Lyrics,Now Playing,Controls,Display' && getComputedStyle($('.search-field')).display === 'none';`));
-    check('14 settings rendered', await js(`return $$('.setting').length;`) === 14);
+    check('13 settings rendered', await js(`return $$('.setting').length;`) === 13);
     await shot('08-settings');
     await openTab('playlists');
     check('leaving settings restores title and search', await js(`return $('#libraryTitle').textContent === 'Your Library' && getComputedStyle($('.search-field')).display !== 'none';`));
@@ -342,7 +396,7 @@ async function run() {
     check('auto lyrics off: new song stays on cover', await js(`await new Promise(r => setTimeout(r, 5000)); return view();`) === 'art');
     await tap(...DISC_TAP);
     check('auto lyrics off: tap shows lyrics', await waitFor(`view() === 'lyrics'`, 1500));
-    await js(`$('#nextBtn').click();`);
+    await js(`__setQueue(['C', 'D']); $('#nextBtn').click();`);
     await waitFor(`$('#trackTitle').textContent !== 'Song B'`);
     check('auto lyrics off: next song back on cover', await js(`await new Promise(r => setTimeout(r, 5000)); return view();`) === 'art');
     await openTab('albums');
@@ -350,7 +404,7 @@ async function run() {
     check('auto lyrics off: playing from library stays on cover', await js(`await new Promise(r => setTimeout(r, 5200)); return view();`) === 'art');
     await setSetting('Show lyrics automatically', true);
     // The setting applies from the next song
-    await js(`__mock.track = 'B'; __mock.positionMs = 40000; __mock.at = Date.now(); __mock.queue = ['C','D'];`);
+    await js(`__mock.track = 'B'; __mock.positionMs = 40000; __mock.at = Date.now(); __setQueue(['C','D']);`);
     check('auto lyrics back on: next song goes to lyrics', await waitFor(`$('#trackTitle').textContent === 'Song B' && view() === 'lyrics'`, 7000));
 
     // Lyrics background
@@ -432,12 +486,6 @@ async function run() {
     await arcDrag(-90, 0);
     check('scrub 15s/turn: quarter turn seeks +3.75s', await waitFor(`calls('/seek').length === 1`) && Math.abs(await js(`return calls('/seek')[0].body.position_ms;`) - before - 3750) < 1200);
     await setSetting('One turn of the record skips', '30 sec');
-
-    await setSetting('Shuffle playlists', false);
-    await openTab('playlists');
-    await js(`clearCalls(); $$('#libraryList .row-main')[0].click();`);
-    check('shuffle off: playlist plays without shuffle', await waitFor(`calls('/api/play').length === 1`) && await js(`return calls('/api/shuffle').length === 0;`));
-    await setSetting('Shuffle playlists', true);
 
     // Display
     await setSetting('Progress ring', false);

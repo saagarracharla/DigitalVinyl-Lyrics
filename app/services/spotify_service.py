@@ -1,14 +1,30 @@
+from concurrent.futures import ThreadPoolExecutor
+import json
+import os
+import threading
+
+from dotenv import load_dotenv
 from flask import jsonify
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
-import os
-from dotenv import load_dotenv
+
+from app.services.play_queue import PlayQueue, REPEAT_MODES
 
 load_dotenv()
+
+# Shuffle and repeat are remembered across restarts, like in Spotify
+PLAYER_STATE_FILE = os.path.join(os.path.dirname(__file__), '..', '..', '.player_state.json')
+PAGE_SIZE = 100
+MAX_CONTEXT_TRACKS = 5000
 
 class SpotifyService:
     def __init__(self):
         self.sp = None
+        self.device_id = None
+        # Requests run on several threads; the queue and the playback commands that follow
+        # from it must change together
+        self.lock = threading.RLock()
+        self.queue = PlayQueue(**self._load_player_state())
         self._initialize_spotify()
     
     def _initialize_spotify(self):
@@ -40,6 +56,7 @@ class SpotifyService:
             
             images = track['album']['images']
             context = playback.get('context') or {}
+            self.observe_playback(track['uri'], context.get('uri'), playback.get('progress_ms'))
             return jsonify({
                 'track_name': track['name'],
                 'artist': track['artists'][0]['name'],
@@ -191,26 +208,110 @@ class SpotifyService:
             return jsonify({'error': str(e)})
     
     def play_item(self, item_type, item_id, context_uri=None, device_id=None):
-        """Play a track, album, or playlist"""
+        """Play a track, album, or playlist through the device's own queue"""
         if not self.sp:
             return jsonify({'error': 'Spotify not connected'})
-        
+
+        if context_uri and not item_id:
+            # e.g. spotify:playlist:37i9dQZF1DXcBWIGoYBM5M
+            parts = context_uri.split(':')
+            item_type, item_id = (parts[1], parts[2]) if len(parts) == 3 else (None, None)
+        if item_type not in ('track', 'album', 'playlist') or not item_id:
+            return jsonify({'error': 'Invalid item type or context_uri'})
+
         try:
-            if item_type == 'track':
-                self.sp.start_playback(device_id=device_id, uris=[f'spotify:track:{item_id}'])
-            elif item_type == 'album':
-                self.sp.start_playback(device_id=device_id, context_uri=f'spotify:album:{item_id}')
-            elif item_type == 'playlist':
-                self.sp.start_playback(device_id=device_id, context_uri=f'spotify:playlist:{item_id}')
-            elif context_uri:
-                self.sp.start_playback(device_id=device_id, context_uri=context_uri)
-            else:
-                return jsonify({'error': 'Invalid item type or context_uri'})
-            
+            tracks, context = self._fetch_tracks(item_type, item_id)
+            if not tracks:
+                return jsonify({'error': 'Nothing playable in that ' + item_type})
+            with self.lock:
+                if device_id:
+                    self.device_id = device_id
+                self.queue.load(tracks, context)
+                self._send_window(device_id)
+                # Spotify's own shuffle would reorder our list, so the device shuffles instead
+                self.sp.shuffle(False, device_id=device_id)
+                self.sp.repeat('track' if self.queue.repeat == 'track' else 'off', device_id=device_id)
             return jsonify({'action': 'playing', 'type': item_type, 'id': item_id})
         except Exception as e:
             return jsonify({'error': str(e)})
-    
+
+    def _fetch_tracks(self, item_type, item_id):
+        """All playable tracks of a playlist, album or single track, plus the context they came from"""
+        if item_type == 'track':
+            return [self._summarize_track(self.sp.track(item_id))], None
+
+        if item_type == 'album':
+            album = self.sp.album(item_id)
+            page = album['tracks']
+            items = list(page['items'])
+            while page.get('next'):
+                page = self.sp.next(page)
+                items.extend(page['items'])
+            # Album tracks don't repeat the album's name and cover, so add them back
+            tracks = [self._summarize_track(dict(t, album=album)) for t in items if t and t.get('uri')]
+            return tracks, {'type': 'album', 'uri': album['uri'], 'name': album['name']}
+
+        playlist = self.sp.playlist(item_id, fields='name,uri,tracks.total')
+        total = min(playlist['tracks']['total'], MAX_CONTEXT_TRACKS)
+        fields = 'items(is_local,track(id,uri,name,type,duration_ms,artists(name),album(name,images)))'
+
+        def page(offset):
+            return self.sp.playlist_items(item_id, limit=PAGE_SIZE, offset=offset, fields=fields,
+                                          additional_types=('track',))['items']
+
+        # Big playlists take many pages; fetch them in parallel so playback starts quickly
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            pages = list(pool.map(page, range(0, total, PAGE_SIZE)))
+        tracks = [
+            self._summarize_track(item['track'])
+            for items in pages for item in items
+            # Local files and podcast episodes can't be played through the Web API
+            if item and not item.get('is_local') and item.get('track')
+            and item['track'].get('type') == 'track' and item['track'].get('id')
+        ]
+        return tracks, {'type': 'playlist', 'uri': playlist['uri'], 'name': playlist['name']}
+
+    def _send_window(self, device_id=None, position_ms=0, paused=False):
+        """Hand Spotify the queue's upcoming tracks, continuing from the current one"""
+        uris, offset = self.queue.build_window()
+        self._start(uris, offset, device_id, position_ms, paused)
+
+    def _start(self, uris, offset, device_id=None, position_ms=0, paused=False):
+        self.sp.start_playback(device_id=device_id or self.device_id, uris=uris,
+                               offset={'position': offset}, position_ms=position_ms)
+        if paused:
+            self.sp.pause_playback(device_id=device_id or self.device_id)
+
+    def _resync_after_edit(self, restart_current=False):
+        """Send Spotify the edited queue, keeping the current song's position and play/pause state"""
+        if not self.queue.active:
+            return
+        playback = self.sp.current_playback()
+        if not playback or not playback.get('device'):
+            return
+        device_id = playback['device']['id']
+        if restart_current:
+            # A different song is now current; start it from the beginning
+            self._send_window(device_id, 0, paused=not playback['is_playing'])
+            return
+        window = self.queue.rebuild_window_if_changed()
+        if window:
+            self._start(*window, device_id, playback.get('progress_ms') or 0, paused=not playback['is_playing'])
+
+    def observe_playback(self, uri, context_uri=None, position_ms=0):
+        """Keep the queue in step with what Spotify is playing"""
+        if not uri:
+            return
+        with self.lock:
+            if not self.queue.active:
+                return
+            moved = self.queue.observe(uri)
+            if moved is None and context_uri:
+                # Something else started a playlist or album; Spotify's own queue is in charge now
+                self.queue.active = False
+            elif moved and self.queue.needs_refill():
+                self._send_window(None, position_ms or 0)
+
     def get_user_saved_albums(self, limit=50, offset=0):
         """Get user's saved albums"""
         if not self.sp:
@@ -241,33 +342,76 @@ class SpotifyService:
         except Exception as e:
             return jsonify({'error': str(e)})
     
-    def add_to_queue(self, track_uri):
-        """Add a track to the queue"""
-        if not self.sp:
-            return jsonify({'error': 'Spotify not connected'})
-        
-        try:
-            self.sp.add_to_queue(track_uri)
-            return jsonify({'success': True, 'track_uri': track_uri})
-        except Exception as e:
-            return jsonify({'error': str(e)})
-    
     def get_queue(self):
-        """Get current queue (currently playing + next tracks)"""
+        """The queue as Spotify shows it: now playing, "Next in queue" and "Next from" """
         if not self.sp:
             return jsonify({'error': 'Spotify not connected'})
-        
+
         try:
+            with self.lock:
+                if self.queue.active:
+                    return jsonify(self.queue.to_json())
+            # Playback was started elsewhere: show Spotify's own queue, which can't be edited
             data = self.sp.queue()
+            playback = self.sp.current_playback() or {}
             current = data.get('currently_playing')
             return jsonify({
-                'currently_playing': self._summarize_track(current) if current else None,
+                'active': False,
+                'shuffle': playback.get('shuffle_state', False),
+                'repeat': playback.get('repeat_state', 'off'),
+                'context': None,
+                'current': self._summarize_track(current) if current else None,
+                'next_in_queue': [],
                 # Episodes and local files in the queue lack track fields
-                'queue': [self._summarize_track(t) for t in data.get('queue', []) if t and t.get('album')]
+                'next_from': [self._summarize_track(t) for t in data.get('queue', []) if t and t.get('album')],
             })
         except Exception as e:
             return jsonify({'error': str(e)})
-    
+
+    def add_to_queue(self, track_uri, play_next=False):
+        """Add a song to "Next in queue" (or to the front of it with play_next)"""
+        if not self.sp:
+            return jsonify({'error': 'Spotify not connected'})
+
+        try:
+            # Spotify accepts unknown URIs without complaint, so look the track up first
+            track = self._summarize_track(self.sp.track(track_uri))
+            with self.lock:
+                if not self.queue.active:
+                    self.sp.add_to_queue(track['uri'])
+                    return jsonify({'success': True, 'track_uri': track['uri']})
+                self.queue.add(track, play_next=play_next)
+                self._resync_after_edit()
+                return jsonify(self.queue.to_json())
+        except Exception as e:
+            return jsonify({'error': str(e)})
+
+    def edit_queue(self, action, uid=None, index=None):
+        """Remove, move, jump to, or clear queue entries"""
+        if not self.sp:
+            return jsonify({'error': 'Spotify not connected'})
+
+        try:
+            with self.lock:
+                if not self.queue.active:
+                    return jsonify({'error': 'This queue was started on another device and can\'t be edited here'})
+                if action == 'remove':
+                    self.queue.remove(uid)
+                elif action == 'move':
+                    self.queue.move(uid, int(index))
+                elif action == 'clear':
+                    self.queue.clear_user_queue()
+                elif action == 'play':
+                    self.queue.jump(uid)
+                else:
+                    return jsonify({'error': f'Unknown queue action: {action}'})
+                self._resync_after_edit(restart_current=action == 'play')
+                return jsonify(self.queue.to_json())
+        except KeyError:
+            return jsonify({'error': 'That song is no longer in the queue'})
+        except Exception as e:
+            return jsonify({'error': str(e)})
+
     def _summarize_track(self, track):
         album = track.get('album') or {}
         images = album.get('images') or []
@@ -282,23 +426,57 @@ class SpotifyService:
         }
     
     def set_shuffle(self, state, device_id=None):
-        """Set shuffle state"""
+        """Shuffle the rest of the playlist (the device's queue), or Spotify's when it's in charge"""
         if not self.sp:
             return jsonify({'error': 'Spotify not connected'})
-        
+
         try:
-            self.sp.shuffle(state, device_id=device_id)
-            return jsonify({'success': True, 'shuffle': state})
+            with self.lock:
+                self.queue.shuffle = bool(state)
+                self._save_player_state()
+                if not self.queue.active:
+                    self.sp.shuffle(bool(state), device_id=device_id)
+                    return jsonify({'success': True, 'shuffle': bool(state)})
+                self.queue.set_shuffle(state)
+                self._resync_after_edit()
+                return jsonify(self.queue.to_json())
         except Exception as e:
             return jsonify({'error': str(e)})
-    
+
     def set_repeat(self, state):
-        """Set repeat state (off, track, context)"""
+        """Set repeat: off, context (the whole playlist) or track"""
         if not self.sp:
             return jsonify({'error': 'Spotify not connected'})
-        
+        if state not in REPEAT_MODES:
+            return jsonify({'error': f'Invalid repeat mode: {state}'})
+
         try:
-            self.sp.repeat(state)
-            return jsonify({'success': True, 'repeat': state})
+            with self.lock:
+                self.queue.repeat = state
+                self._save_player_state()
+                if not self.queue.active:
+                    self.sp.repeat(state)
+                    return jsonify({'success': True, 'repeat': state})
+                # The device repeats the playlist itself; Spotify only handles repeating one song
+                self.sp.repeat('track' if state == 'track' else 'off')
+                self.queue.set_repeat(state)
+                self._resync_after_edit()
+                return jsonify(self.queue.to_json())
         except Exception as e:
             return jsonify({'error': str(e)})
+
+    def _load_player_state(self):
+        try:
+            with open(PLAYER_STATE_FILE) as f:
+                saved = json.load(f)
+            repeat = saved.get('repeat') if saved.get('repeat') in REPEAT_MODES else 'off'
+            return {'shuffle': saved.get('shuffle') is True, 'repeat': repeat}
+        except (OSError, ValueError):
+            return {'shuffle': False, 'repeat': 'off'}
+
+    def _save_player_state(self):
+        try:
+            with open(PLAYER_STATE_FILE, 'w') as f:
+                json.dump({'shuffle': self.queue.shuffle, 'repeat': self.queue.repeat}, f)
+        except OSError as e:
+            print(f"Couldn't save player state: {e}")

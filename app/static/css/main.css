@@ -445,9 +445,71 @@ svg {
     transform: translateX(-50%);
     display: flex;
     align-items: center;
-    gap: 6cqmin;
+    gap: 3.6cqmin;
     z-index: 10;
     transition: opacity 0.35s var(--ease-out);
+}
+
+/* Shuffle and repeat: smaller, and raised to follow the curve of the screen */
+.icon-btn.mode-btn {
+    position: relative;
+    width: 7.6cqmin;
+    height: 7.6cqmin;
+    color: var(--text-subdued);
+    transform: translateY(-2.2cqmin);
+}
+
+.icon-btn.mode-btn svg {
+    width: 4.4cqmin;
+    height: 4.4cqmin;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.icon-btn.mode-btn:active {
+    transform: translateY(-2.2cqmin) scale(0.88);
+}
+
+/* On: green with a dot underneath, as in Spotify */
+.mode-btn[aria-pressed="true"],
+.mode-btn:not([data-repeat="off"])[data-repeat] {
+    color: var(--accent);
+}
+
+.mode-btn[aria-pressed="true"]::after,
+.mode-btn:not([data-repeat="off"])[data-repeat]::after {
+    content: "";
+    position: absolute;
+    bottom: 0.2cqmin;
+    left: 50%;
+    width: 0.8cqmin;
+    height: 0.8cqmin;
+    margin-left: -0.4cqmin;
+    border-radius: 50%;
+    background: currentColor;
+}
+
+.repeat-one {
+    display: none;
+    position: absolute;
+    top: 0.6cqmin;
+    right: 0.4cqmin;
+    min-width: 2.3cqmin;
+    height: 2.3cqmin;
+    border-radius: 50%;
+    background: var(--accent);
+    color: #000;
+    font-size: 1.6cqmin;
+    font-weight: 800;
+    line-height: 2.3cqmin;
+    text-align: center;
+}
+
+.mode-btn[data-repeat="track"] .repeat-one {
+    display: block;
 }
 
 .icon-btn {
@@ -696,8 +758,96 @@ svg {
 }
 
 /* Queue section headings sit a little apart from the rows above */
-.library-list .row + .settings-heading {
+.library-list .row + .settings-heading,
+.library-list .queue-section + .settings-heading,
+.library-list .row + .queue-heading,
+.library-list .queue-section + .queue-heading {
     margin-top: 2.4cqmin;
+}
+
+.queue-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 2cqmin;
+    margin: 0 0 1cqmin;
+}
+
+.queue-heading .settings-heading {
+    margin-bottom: 0;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.queue-clear {
+    flex-shrink: 0;
+    padding: 1cqmin 2.2cqmin;
+    border-radius: 999px;
+    border: 0.25cqmin solid rgba(255, 255, 255, 0.35);
+    font-size: 2.4cqmin;
+    font-weight: 700;
+    color: var(--text);
+}
+
+.queue-clear:active {
+    transform: scale(0.95);
+    border-color: var(--text);
+}
+
+.queue-section {
+    position: relative;
+}
+
+.row-remove,
+.row-handle {
+    flex-shrink: 0;
+    width: 6.4cqmin;
+    height: 7cqmin;
+    display: grid;
+    place-items: center;
+    color: var(--text-subdued);
+    border-radius: 50%;
+}
+
+.row-remove svg,
+.row-handle svg {
+    width: 4cqmin;
+    height: 4cqmin;
+}
+
+.row-remove:active {
+    color: var(--text);
+    transform: scale(0.88);
+}
+
+/* Drag handles must not scroll the list */
+.row-handle {
+    touch-action: none;
+    cursor: grab;
+    margin-right: 0.4cqmin;
+}
+
+.row.dragging {
+    position: relative;
+    z-index: 2;
+    background: var(--surface-raised);
+    box-shadow: 0 1.2cqmin 3cqmin rgba(0, 0, 0, 0.5);
+    transition: none;
+}
+
+.row.removing {
+    opacity: 0;
+    transform: translateX(-6%);
+    transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.queue-note {
+    margin: 2.4cqmin 1.4cqmin 0;
+    font-size: 2.4cqmin;
+    color: var(--text-subdued);
+    text-align: center;
 }
 
 .row-art {

@@ -15,7 +15,7 @@ A beautiful circular Spotify player that brings the classic vinyl experience to 
 - **Spinning record**: the album cover turns like vinyl while music plays. Drag it around to scrub through the song (a full turn is 30 seconds).
 - **Synced lyrics**: lines scroll in time with the music over a colour taken from the album cover.
 - **Your library**: playlists, saved albums, recently played and search, all inside the circle.
-- **Queue**: see what's playing next, add songs with **+**, and tap a queued song to skip to it. Spotify's API can't remove or reorder queue items.
+- **Queue, shuffle and repeat like Spotify's**: "Next in queue" and "Next from: *playlist*", with remove, drag to reorder, Clear queue, and tap to play. Spotify's API can't edit its own queue, so the device keeps the queue itself and sends Spotify the list to play (`app/services/play_queue.py`). After an edit it re-sends the list from the current spot, which can cause a brief blip in the audio. If playback is started from another app, the device shows Spotify's own queue instead, read-only.
 - **Settings**: lyrics background (album colour, spinning cover or black), text size, current-line-only lyrics, fading song info, auto-hiding buttons, spin speed, scrub speed, progress ring style, idle clock and more. Saved on the device.
 - **Spotify Connect device**: shows up in Spotify as **Digital Vinyl**. It also follows music playing on your other devices.
 - **Made for round screens**: designed at 1080×1080 and scales to any square window.
@@ -70,12 +70,13 @@ Visit: http://127.0.0.1:5004
 | Drag around the record | Scrub forward or back |
 | Tap the record | Switch between the cover and lyrics (tap a paused record to resume) |
 | Top button | Open or close your library |
-| Bottom buttons | Previous, play/pause, next |
+| Bottom buttons | Shuffle, previous, play/pause, next, repeat (off → all → one song) |
 | Library chips | Switch between Playlists, Albums, Recent and Queue; type in the search field to find songs |
 | **+** on a song | Add it to the queue |
+| Queue | Tap a song to play it, **−** to remove, drag **≡** to reorder |
 | Gear chip | Settings |
 
-Playlists start in shuffle. On a keyboard: Space plays or pauses, ← / → skip back or forward 10 seconds, Esc closes the library.
+Shuffle and repeat are remembered between restarts. On a keyboard: Space plays or pauses, ← / → skip back or forward 10 seconds, Esc closes the library.
 
 ## Architecture
 
@@ -114,6 +115,12 @@ Playlists start in shuffle. On a keyboard: Space plays or pauses, ← / → skip
 - **Circular Design**: Optimized for 1080x1080 circular displays
 
 ## Testing
+
+Unit tests cover the queue and how it drives Spotify, using a fake Spotify client:
+
+```bash
+python -m unittest discover tests
+```
 
 End-to-end UI tests run the real page in headless Chrome against a fake Spotify backend (`tests/ui/mock.js`), so they never touch your Spotify account. They cover playback controls, tap and drag gestures, lyrics, the library, search, the queue, every setting, error messages and keyboard shortcuts.
 

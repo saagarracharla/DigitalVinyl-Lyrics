@@ -48,3 +48,6 @@ Thumbs.db
 # Virtual environment
 .venv/
 tests/ui/shots/
+
+# Remembered shuffle/repeat
+.player_state.json

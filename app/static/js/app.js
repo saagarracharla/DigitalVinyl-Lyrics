@@ -38,7 +38,6 @@ const SETTINGS_SCHEMA = [
         { key: 'autoHideControls', type: 'toggle', default: false, label: 'Auto-hide buttons', description: 'Hide while playing; tap the record to bring them back' },
         { key: 'scrubSeconds', type: 'choice', default: '30', label: 'One turn of the record skips',
           options: [['15', '15 sec'], ['30', '30 sec'], ['60', '1 min']] },
-        { key: 'shufflePlaylists', type: 'toggle', default: true, label: 'Shuffle playlists', description: 'Start playlists in shuffle' },
     ] },
     { section: 'Display', items: [
         { key: 'showProgress', type: 'toggle', default: true, label: 'Progress ring' },
@@ -76,6 +75,12 @@ function saveSettings(settings) {
         console.warn('Could not save settings:', error);
     }
 }
+
+const REPEAT_CYCLE = { off: 'context', context: 'track', track: 'off' };
+const REPEAT_LABELS = { off: 'Repeat: off', context: 'Repeat: all', track: 'Repeat: one song' };
+
+const ICON_REMOVE = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9.5" fill="none" stroke="currentColor" stroke-width="1.8" /><path d="M7.5 12h9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" /></svg>';
+const ICON_HANDLE = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h16M4 12h16M4 16h16" stroke="currentColor" stroke-width="2" stroke-linecap="round" /></svg>';
 
 const RING_RADIUS = 532;                   // matches the SVG in index.html (viewBox 1080)
 const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
@@ -181,6 +186,11 @@ class VinylPlayer {
         this.controlsHiddenAtPointerDown = false;
         this.settings = loadSettings();
 
+        // Queue: the device keeps its own (see app/services/play_queue.py)
+        this.queue = null;            // last state from /api/queue
+        this.queueDrag = null;
+        this.reportedUri = null;
+
         // Library
         this.libraryTab = 'playlists';
         this.libraryRequest = 0;
@@ -194,7 +204,8 @@ class VinylPlayer {
         this.el = Object.fromEntries([
             'player', 'disc', 'albumArt', 'progressFill', 'progressKnob', 'trackTitle', 'trackArtist',
             'lyricsView', 'lyricsLines', 'seekTime', 'seekTotal', 'library', 'searchInput', 'libraryList',
-            'libraryBtn', 'prevBtn', 'playPauseBtn', 'nextBtn', 'toast', 'libraryTitle', 'idleTime', 'idleDate'
+            'libraryBtn', 'prevBtn', 'playPauseBtn', 'nextBtn', 'toast', 'libraryTitle', 'idleTime', 'idleDate',
+            'shuffleBtn', 'repeatBtn'
         ].map(id => [id, document.getElementById(id)]));
         this.el.chips = [...document.querySelectorAll('.chip')];
 
@@ -204,6 +215,7 @@ class VinylPlayer {
 
         // Show whatever is playing right away (even on another device), then keep in sync
         this.sync();
+        this.refreshQueue();
         this.updateClock();
         setInterval(() => {
             this.sync();
@@ -223,6 +235,8 @@ class VinylPlayer {
         this.el.prevBtn.addEventListener('click', () => this.previousTrack());
         this.el.nextBtn.addEventListener('click', () => this.nextTrack());
         this.el.libraryBtn.addEventListener('click', () => this.toggleLibrary());
+        this.el.shuffleBtn.addEventListener('click', () => this.toggleShuffle());
+        this.el.repeatBtn.addEventListener('click', () => this.cycleRepeat());
 
         this.el.chips.forEach(chip => {
             chip.addEventListener('click', () => {
@@ -389,6 +403,26 @@ class VinylPlayer {
         }
 
         this.setPlaying(playback.isPlaying);
+
+        if (playback.uri && playback.uri !== this.reportedUri) {
+            this.reportedUri = playback.uri;
+            this.reportNowPlaying(playback);
+        }
+    }
+
+    // The server's queue follows Spotify from track to track. When playback is on this device the
+    // page reads it from the SDK rather than the server, so tell the server about each new track.
+    async reportNowPlaying(playback) {
+        try {
+            await this.postJson('/api/now-playing', {
+                uri: playback.uri,
+                context_uri: playback.contextUri || null,
+                position_ms: Math.floor(playback.positionMs || 0)
+            });
+        } catch (error) {
+            console.warn('Now playing report failed:', error);
+        }
+        this.refreshQueue();
     }
 
     loadTrack(track) {
@@ -415,9 +449,6 @@ class VinylPlayer {
         this.fetchLyrics(track, 0);
         this.highlightPlayingRows();
         this.refreshSongInfoFade();
-        if (this.isLibraryOpen() && this.libraryTab === 'queue' && !this.el.searchInput.value.trim()) {
-            this.loadQueue();
-        }
     }
 
     clearTrack() {
@@ -768,13 +799,15 @@ class VinylPlayer {
         // Play on this device when it's connected, otherwise on whichever device is active
         const deviceId = this.isSDKReady ? this.deviceId : undefined;
         try {
-            if (item.kind === 'playlist' && this.settings.shufflePlaylists) {
-                // If shuffle fails, still play
-                await this.postJson('/api/shuffle', { state: true, device_id: deviceId }, 'PUT')
-                    .catch(error => console.warn('Shuffle failed:', error));
+            // Big playlists take a moment to load
+            const slow = setTimeout(() => this.showToast('Loading…'), 600);
+            try {
+                await this.postJson('/api/play', { type: item.kind, id: item.id, device_id: deviceId });
+            } finally {
+                clearTimeout(slow);
             }
-            await this.postJson('/api/play', { type: item.kind, id: item.id, device_id: deviceId });
             this.closeLibrary();
+            this.refreshQueue();
         } catch (error) {
             console.error('Play error:', error);
             this.showToast(/NO_ACTIVE_DEVICE|No active device/i.test(error.message)
@@ -947,11 +980,34 @@ class VinylPlayer {
     }
 
     // ---------- Queue ----------
-    // Spotify's API can read the queue and add to it, but not remove or reorder items.
+    // The server keeps the queue; every change returns its new state, which is rendered as is.
+
+    isShowingQueue() {
+        return this.isLibraryOpen() && this.libraryTab === 'queue' && !this.el.searchInput.value.trim();
+    }
+
+    async refreshQueue() {
+        try {
+            const response = await fetch('/api/queue');
+            const data = await response.json();
+            if (!response.ok || data.error) throw new Error(data.error || `HTTP ${response.status}`);
+            this.applyQueue(data);
+        } catch (error) {
+            console.warn('Queue error:', error);
+        }
+    }
+
+    applyQueue(state) {
+        this.queue = state;
+        this.renderModeButtons();
+        this.highlightPlayingRows();
+        // Don't redraw under a finger that's dragging a row
+        if (this.isShowingQueue() && !this.queueDrag) this.renderQueue(state);
+    }
 
     async loadQueue() {
         const request = ++this.libraryRequest;
-        this.renderSkeleton();
+        if (this.queue) this.renderQueue(this.queue); else this.renderSkeleton();
         try {
             const response = await fetch('/api/queue');
             const data = await response.json();
@@ -959,7 +1015,7 @@ class VinylPlayer {
                 throw new Error(data.error || `HTTP ${response.status}`);
             }
             if (request !== this.libraryRequest) return;
-            this.renderQueue(data.currently_playing, data.queue || []);
+            this.applyQueue(data);
         } catch (error) {
             console.error('Queue error:', error);
             if (request === this.libraryRequest) {
@@ -968,44 +1024,169 @@ class VinylPlayer {
         }
     }
 
-    renderQueue(current, upcoming) {
-        if (!current && upcoming.length === 0) {
-            this.renderListMessage('Your queue is empty. Add songs with + in search or Recent.');
+    renderQueue(state) {
+        const upNext = state.next_in_queue || [];
+        const nextFrom = state.next_from || [];
+        if (!state.current && upNext.length === 0 && nextFrom.length === 0) {
+            this.renderListMessage('Your queue is empty. Play a playlist, or add songs with + in search or Recent.');
             return;
         }
-        const heading = text => {
-            const element = document.createElement('h3');
-            element.className = 'settings-heading';
-            element.textContent = text;
+        const editable = state.active;
+        const scroll = this.el.libraryList.scrollTop;
+        const heading = (text, action) => {
+            const wrap = document.createElement('div');
+            wrap.className = 'queue-heading';
+            const title = document.createElement('h3');
+            title.className = 'settings-heading';
+            title.textContent = text;
+            wrap.appendChild(title);
+            if (action) wrap.appendChild(action);
+            return wrap;
+        };
+        const section = (entries, offset) => {
+            const element = document.createElement('div');
+            element.className = 'queue-section';
+            entries.forEach((track, index) => element.appendChild(this.buildQueueRow(track, editable, offset + index)));
             return element;
         };
-        const queueRow = (track, onSelect) => this.buildRow({
-            art: track.album_art,
-            title: track.name,
-            meta: track.artists.join(', '),
-            uri: track.uri,
-            onSelect
-        });
 
         const children = [];
-        if (current) {
-            children.push(heading('Now playing'), queueRow(current, () => this.closeLibrary()));
+        if (state.current) {
+            const now = this.buildRow({
+                art: state.current.album_art, title: state.current.name, meta: (state.current.artists || []).join(', '),
+                uri: state.current.uri, onSelect: () => this.closeLibrary()
+            });
+            now.classList.add('playing');
+            children.push(heading('Now playing'), now);
         }
-        if (upcoming.length > 0) {
-            children.push(heading('Next up'));
-            upcoming.forEach((track, index) => children.push(queueRow(track, () => this.skipAhead(index + 1))));
+        if (upNext.length > 0) {
+            const clear = document.createElement('button');
+            clear.type = 'button';
+            clear.className = 'queue-clear';
+            clear.textContent = 'Clear queue';
+            clear.addEventListener('click', () => this.editQueue('clear'));
+            children.push(heading('Next in queue', editable ? clear : null), section(upNext, 0));
+        }
+        if (nextFrom.length > 0) {
+            const name = state.context?.name;
+            children.push(heading(name ? `Next from: ${name}` : 'Next up'), section(nextFrom, upNext.length));
+            const more = (state.next_from_total || 0) - nextFrom.length;
+            if (more > 0) children.push(this.queueNote(`and ${more} more`));
+        }
+        if (!editable) {
+            children.push(this.queueNote('Started on another device. Play a playlist here to edit the queue.'));
         }
         this.el.libraryList.replaceChildren(...children);
-        // Only the song playing now should be green, not later repeats of it
-        this.el.libraryList.querySelectorAll('.row').forEach((row, index) => {
-            row.classList.toggle('playing', Boolean(current) && index === 0);
+        this.el.libraryList.scrollTop = scroll;
+    }
+
+    queueNote(text) {
+        const note = document.createElement('p');
+        note.className = 'queue-note';
+        note.textContent = text;
+        return note;
+    }
+
+    buildQueueRow(track, editable, position) {
+        const row = this.buildRow({
+            art: track.album_art,
+            title: track.name,
+            meta: (track.artists || []).join(', '),
+            uri: track.uri,
+            // Spotify's own queue has no "play this item" command, so skip forward to it instead
+            onSelect: editable ? () => this.jumpTo(track.uid) : () => this.skipAhead(position + 1)
         });
-        this.el.libraryList.scrollTop = 0;
+        if (!editable) return row;
+        row.dataset.uid = track.uid;
+
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'row-remove';
+        remove.setAttribute('aria-label', `Remove ${track.name} from queue`);
+        remove.innerHTML = ICON_REMOVE;
+        remove.addEventListener('click', () => {
+            row.classList.add('removing');
+            this.editQueue('remove', { uid: track.uid });
+        });
+
+        const handle = document.createElement('button');
+        handle.type = 'button';
+        handle.className = 'row-handle';
+        handle.setAttribute('aria-label', `Drag to reorder ${track.name}`);
+        handle.innerHTML = ICON_HANDLE;
+        handle.addEventListener('pointerdown', e => this.startQueueDrag(e, row));
+
+        row.append(remove, handle);
+        return row;
+    }
+
+    async editQueue(action, body = {}) {
+        try {
+            this.applyQueue(await this.postJson(`/api/queue/${action}`, body));
+        } catch (error) {
+            console.error('Queue edit error:', error);
+            this.showToast(error.message.includes('another device') ? error.message : "Couldn't change the queue");
+            this.refreshQueue();
+        }
+    }
+
+    async jumpTo(uid) {
+        this.closeLibrary();
+        await this.editQueue('play', { uid });
+    }
+
+    // Drag a row by its handle; other rows make room as it passes them
+    startQueueDrag(e, row) {
+        e.preventDefault();
+        const pointerId = e.pointerId;
+        const sectionEl = row.parentElement;
+        this.queueDrag = { row, sectionEl, startY: e.clientY, startTop: row.offsetTop, startIndex: [...sectionEl.children].indexOf(row) };
+        row.classList.add('dragging');
+
+        // Listen on the window: moving the row in the DOM would drop pointer capture on the handle
+        const move = event => {
+            const drag = this.queueDrag;
+            if (!drag || event.pointerId !== pointerId) return;
+            // Swap with a neighbour once the finger passes its middle
+            const siblings = [...sectionEl.children].filter(child => child !== row);
+            const y = event.clientY;
+            const before = siblings.find(child => {
+                const box = child.getBoundingClientRect();
+                return y < box.top + box.height / 2;
+            });
+            if (before !== row.nextElementSibling) {
+                sectionEl.insertBefore(row, before || null);
+            }
+            row.style.transform = `translateY(${y - drag.startY - (row.offsetTop - drag.startTop)}px)`;
+
+            // Scroll when dragging near the top or bottom of the list
+            const list = this.el.libraryList.getBoundingClientRect();
+            if (y < list.top + 40) this.el.libraryList.scrollTop -= 12;
+            else if (y > list.bottom - 40) this.el.libraryList.scrollTop += 12;
+        };
+        const end = event => {
+            if (event.pointerId !== pointerId) return;
+            window.removeEventListener('pointermove', move);
+            window.removeEventListener('pointerup', end);
+            window.removeEventListener('pointercancel', end);
+            const drag = this.queueDrag;
+            this.queueDrag = null;
+            row.classList.remove('dragging');
+            row.style.transform = '';
+            const index = [...sectionEl.children].indexOf(row);
+            if (drag && index !== drag.startIndex) {
+                this.editQueue('move', { uid: row.dataset.uid, index });
+            }
+        };
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', end);
+        window.addEventListener('pointercancel', end);
     }
 
     async addToQueue(uri, name) {
         try {
-            await this.postJson('/api/queue/add', { track_uri: uri });
+            const data = await this.postJson('/api/queue/add', { track_uri: uri });
+            if ('active' in data) this.applyQueue(data);
             this.showToast(`Added ${name} to queue`);
         } catch (error) {
             console.error('Add to queue error:', error);
@@ -1015,7 +1196,7 @@ class VinylPlayer {
         }
     }
 
-    // There's no "play this queue item" API, so skip forward one song at a time
+    // Used only for Spotify's own queue, which can't jump straight to an item
     async skipAhead(count) {
         this.closeLibrary();
         try {
@@ -1025,6 +1206,45 @@ class VinylPlayer {
         } catch (error) {
             console.error('Skip ahead error:', error);
             this.showToast("Couldn't skip ahead");
+        }
+    }
+
+    // ---------- Shuffle & repeat ----------
+
+    renderModeButtons() {
+        const shuffle = Boolean(this.queue?.shuffle);
+        const repeat = this.queue?.repeat || 'off';
+        this.el.shuffleBtn.setAttribute('aria-pressed', String(shuffle));
+        this.el.shuffleBtn.setAttribute('aria-label', shuffle ? 'Shuffle: on' : 'Shuffle: off');
+        this.el.repeatBtn.dataset.repeat = repeat;
+        this.el.repeatBtn.setAttribute('aria-label', REPEAT_LABELS[repeat]);
+    }
+
+    async toggleShuffle() {
+        const state = !this.queue?.shuffle;
+        this.queue = { ...this.queue, shuffle: state };
+        this.renderModeButtons();
+        try {
+            const data = await this.postJson('/api/shuffle', { state, device_id: this.isSDKReady ? this.deviceId : undefined }, 'PUT');
+            if ('active' in data) this.applyQueue(data); else this.refreshQueue();
+        } catch (error) {
+            console.error('Shuffle error:', error);
+            this.showToast("Couldn't change shuffle");
+            this.refreshQueue();
+        }
+    }
+
+    async cycleRepeat() {
+        const state = REPEAT_CYCLE[this.queue?.repeat || 'off'];
+        this.queue = { ...this.queue, repeat: state };
+        this.renderModeButtons();
+        try {
+            const data = await this.postJson('/api/repeat', { state }, 'PUT');
+            if ('active' in data) this.applyQueue(data); else this.refreshQueue();
+        } catch (error) {
+            console.error('Repeat error:', error);
+            this.showToast("Couldn't change repeat");
+            this.refreshQueue();
         }
     }
 
@@ -1042,7 +1262,7 @@ class VinylPlayer {
 
     highlightPlayingRows() {
         if (this.libraryTab === 'queue' && !this.el.searchInput.value.trim()) return;
-        const playing = [this.track?.uri, this.track?.contextUri].filter(Boolean);
+        const playing = [this.track?.uri, this.track?.contextUri, this.queue?.active && this.queue.context?.uri].filter(Boolean);
         this.el.libraryList.querySelectorAll('.row[data-uri]').forEach(row => {
             row.classList.toggle('playing', playing.includes(row.dataset.uri));
         });

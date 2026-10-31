@@ -3,7 +3,9 @@
 window.__calls = [];
 window.__mock = {
     track: 'A', playing: true, positionMs: 20000, at: Date.now(),
-    queue: ['B', 'C', 'D'], failNext: null, lyricsFail: 0, lyricsDelayMs: 0, lyricsFor: { A: true, B: true, C: false, D: true },
+    // The device's queue (see app/services/play_queue.py): entries are { uid, id }
+    queueActive: true, shuffle: false, repeat: 'off', contextInfo: null, user: [], from: [],
+    failNext: null, lyricsFail: 0, lyricsDelayMs: 0, lyricsFor: { A: true, B: true, C: false, D: true },
 };
 const art = color => `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="64" height="64" fill="${color}"/></svg>`)}`;
 const MOCK_TRACKS = {
@@ -18,6 +20,29 @@ const position = () => {
 };
 const setPosition = ms => { window.__mock.positionMs = ms; window.__mock.at = Date.now(); };
 const playTrack = id => { window.__mock.track = id; setPosition(0); window.__mock.playing = true; };
+let uidCounter = 0;
+const entry = id => ({ uid: `u${++uidCounter}`, id });
+window.__setQueue = (ids, user = []) => { window.__mock.from = ids.map(entry); window.__mock.user = user.map(entry); };
+window.__setQueue(['B', 'C', 'D']);
+const queueState = () => {
+    const m = window.__mock;
+    const item = e => ({ ...summary(MOCK_TRACKS[e.id]), ...(m.queueActive ? { uid: e.uid } : {}) });
+    return {
+        active: m.queueActive, shuffle: m.shuffle, repeat: m.repeat, context: m.queueActive ? m.contextInfo : null,
+        current: m.track ? summary(MOCK_TRACKS[m.track]) : null,
+        next_in_queue: m.queueActive ? m.user.map(item) : [],
+        next_from: (m.queueActive ? m.from : [...m.user, ...m.from]).map(item),
+        next_from_total: m.from.length,
+    };
+};
+const findEntry = uid => {
+    const m = window.__mock;
+    for (const section of [m.user, m.from]) {
+        const i = section.findIndex(e => e.uid === uid);
+        if (i >= 0) return { section, i };
+    }
+    return null;
+};
 const summary = t => ({ id: t.id, uri: t.uri, name: t.name, artists: t.artists.map(a => a.name), album: t.album.name, album_art: t.album.images[0].url, duration_ms: t.duration_ms });
 
 window.fetch = async (url, options = {}) => {
@@ -57,14 +82,38 @@ window.fetch = async (url, options = {}) => {
         case '/api/albums': return json({ items: [{ id: 'AL1', uri: 'spotify:album:AL1', name: 'Album A', artists: [{ name: 'Artist A' }], images: [{ url: art('#c0392b') }] }] });
         case '/api/recently-played': return json({ items: [MOCK_TRACKS.A, MOCK_TRACKS.B, MOCK_TRACKS.A, MOCK_TRACKS.C] });
         case '/api/search': return json({ tracks: { items: [MOCK_TRACKS.D, MOCK_TRACKS.B] } });
-        case '/api/queue': return json({ currently_playing: m.track ? summary(MOCK_TRACKS[m.track]) : null, queue: m.queue.map(id => summary(MOCK_TRACKS[id])) });
-        case '/api/queue/add': m.queue.push(body.track_uri.split(':').pop()); return json({ success: true });
-        case '/api/shuffle': return json({ success: true, shuffle: body.state });
+        case '/api/queue': return json(queueState());
+        case '/api/queue/add': {
+            const id = body.track_uri.split(':').pop();
+            if (!MOCK_TRACKS[id]) return json({ error: 'invalid id' });
+            m.user[body.play_next ? 'unshift' : 'push'](entry(id));
+            return json(queueState());
+        }
+        case '/api/queue/remove': case '/api/queue/move': case '/api/queue/play': {
+            if (!m.queueActive) return json({ error: "This queue was started on another device and can't be edited here" });
+            const found = findEntry(body.uid);
+            if (!found) return json({ error: 'That song is no longer in the queue' });
+            const [e] = found.section.splice(found.i, 1);
+            const action = u.pathname.split('/').pop();
+            if (action === 'move') found.section.splice(body.index, 0, e);
+            if (action === 'play') { found.section.splice(0, found.i); playTrack(e.id); }
+            return json(queueState());
+        }
+        case '/api/queue/clear': m.user = []; return json(queueState());
+        case '/api/now-playing': return json({ success: true });
+        case '/api/shuffle': m.shuffle = body.state; if (body.state) m.from.reverse(); return json(queueState());
+        case '/api/repeat': m.repeat = body.state; return json(queueState());
         case '/api/play':
-            if (body.type === 'track') { playTrack(body.id); m.context = null; }
-            else { m.context = `spotify:${body.type}:${body.id}`; playTrack('A'); }
+            if (body.type === 'track') { playTrack(body.id); m.contextInfo = null; m.context = null; }
+            else {
+                m.context = `spotify:${body.type}:${body.id}`;
+                m.contextInfo = { type: body.type, uri: m.context, name: body.type === 'playlist' ? 'Road Trip' : 'Album A' };
+                playTrack('A');
+                window.__setQueue(['B', 'C', 'D'], m.user.map(e => e.id));
+            }
+            m.queueActive = true;
             return json({ action: 'playing' });
-        case '/next-track': if (m.queue.length) playTrack(m.queue.shift()); return json({ action: 'next' });
+        case '/next-track': { const next = m.user.shift() || m.from.shift(); if (next) playTrack(next.id); return json({ action: 'next' }); }
         case '/previous-track': setPosition(0); return json({ action: 'previous' });
         case '/play-pause': setPosition(position()); m.playing = !m.playing; return json({ action: m.playing ? 'playing' : 'paused' });
         case '/seek': setPosition(body.position_ms); return json({ action: 'seek' });

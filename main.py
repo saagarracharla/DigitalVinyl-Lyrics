@@ -94,7 +94,21 @@ def create_app():
         track_uri = data.get('track_uri')
         if not track_uri:
             return jsonify({'error': 'track_uri required'})
-        return spotify_service.add_to_queue(track_uri)
+        return spotify_service.add_to_queue(track_uri, play_next=bool(data.get('play_next')))
+
+    @app.route('/api/queue/<action>', methods=['POST'])
+    def edit_queue(action):
+        # remove {uid}, move {uid, index}, play {uid}, clear {}
+        data = request.json or {}
+        return spotify_service.edit_queue(action, data.get('uid'), data.get('index'))
+
+    @app.route('/api/now-playing', methods=['POST'])
+    def now_playing():
+        # When playback is on this device the page reads it from the SDK, so it reports
+        # track changes here to keep the queue in step
+        data = request.json or {}
+        spotify_service.observe_playback(data.get('uri'), data.get('context_uri'), data.get('position_ms'))
+        return jsonify({'success': True})
     
     @app.route('/api/shuffle', methods=['PUT'])
     def set_shuffle():
