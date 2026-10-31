@@ -26,6 +26,14 @@ def _entry(track, origin, index=None):
     return entry
 
 
+def _matches(entry, uri, name=None, artist=None):
+    """Whether Spotify's report is this entry. Spotify sometimes plays a different version of a song
+    than the one requested (another ID for the same recording), so fall back to name and artist."""
+    if entry['uri'] == uri:
+        return True
+    return bool(name) and entry.get('name') == name and (not artist or artist in (entry.get('artists') or []))
+
+
 class PlayQueue:
     def __init__(self, shuffle=False, repeat='off', rng=None):
         self.shuffle = shuffle
@@ -113,20 +121,20 @@ class PlayQueue:
         remaining = len(self._window) - 1 - self._offset
         return remaining <= 1 and len(self.upcoming()) > remaining
 
-    def observe(self, uri):
-        """Follow Spotify to the track it's now playing.
+    def observe(self, uri, name=None, artist=None):
+        """Follow Spotify to the track it's now playing (name and artist help match other versions).
 
         Returns True if the queue moved, False if nothing changed, and None if the track isn't
         one of ours (played from another app, or something added to Spotify's own queue).
         """
         if not self.active or not self.current:
             return None
-        if self.current['uri'] == uri:
+        if _matches(self.current, uri, name, artist):
             return False
         window = self._window
         # Spotify is playing ahead of us (next, or a track ended) ...
         for j in range(self._offset + 1, len(window)):
-            if window[j]['uri'] == uri:
+            if _matches(window[j], uri, name, artist):
                 for entry in window[self._offset + 1:j + 1]:
                     self._advance_to(entry)
                 self._offset = j
@@ -134,7 +142,7 @@ class PlayQueue:
                 return True
         # ... or behind (previous)
         for j in range(self._offset - 1, -1, -1):
-            if window[j]['uri'] == uri:
+            if _matches(window[j], uri, name, artist):
                 for _ in range(self._offset - j):
                     self._step_back()
                 self._offset = j

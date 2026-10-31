@@ -2,6 +2,7 @@ from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 import threading
+import time
 
 from dotenv import load_dotenv
 from flask import jsonify
@@ -16,11 +17,16 @@ load_dotenv()
 PLAYER_STATE_FILE = os.path.join(os.path.dirname(__file__), '..', '..', '.player_state.json')
 PAGE_SIZE = 100
 MAX_CONTEXT_TRACKS = 5000
+# After the device sends a list, Spotify keeps reporting what played before until it switches,
+# which can take a few seconds. Stop waiting for it after this long.
+CONFIRM_TIMEOUT_S = 8
 
 class SpotifyService:
     def __init__(self):
         self.sp = None
         self.device_id = None
+        self._sent_at = 0
+        self._confirmed = True    # Spotify has started playing the list the device last sent
         # Requests run on several threads; the queue and the playback commands that follow
         # from it must change together
         self.lock = threading.RLock()
@@ -56,7 +62,9 @@ class SpotifyService:
             
             images = track['album']['images']
             context = playback.get('context') or {}
-            self.observe_playback(track['uri'], context.get('uri'), playback.get('progress_ms'))
+            self.observe_playback(track['uri'], context.get('uri'), playback.get('progress_ms'),
+                                  track['name'], track['artists'][0]['name'] if track['artists'] else None,
+                                  context_verified=True)
             return jsonify({
                 'track_name': track['name'],
                 'artist': track['artists'][0]['name'],
@@ -227,8 +235,14 @@ class SpotifyService:
                 if device_id:
                     self.device_id = device_id
                 self.queue.load(tracks, context)
+                # Spotify's own shuffle would reorder our list, so the device shuffles instead.
+                # Turn it off first so the list starts in our order; that fails when no device is
+                # active yet, so turn it off again once playback has started.
+                try:
+                    self.sp.shuffle(False, device_id=device_id)
+                except Exception:
+                    pass
                 self._send_window(device_id)
-                # Spotify's own shuffle would reorder our list, so the device shuffles instead
                 self.sp.shuffle(False, device_id=device_id)
                 self.sp.repeat('track' if self.queue.repeat == 'track' else 'off', device_id=device_id)
             return jsonify({'action': 'playing', 'type': item_type, 'id': item_id})
@@ -279,6 +293,8 @@ class SpotifyService:
     def _start(self, uris, offset, device_id=None, position_ms=0, paused=False):
         self.sp.start_playback(device_id=device_id or self.device_id, uris=uris,
                                offset={'position': offset}, position_ms=position_ms)
+        self._sent_at = time.monotonic()
+        self._confirmed = False
         if paused:
             self.sp.pause_playback(device_id=device_id or self.device_id)
 
@@ -290,27 +306,66 @@ class SpotifyService:
         if not playback or not playback.get('device'):
             return
         device_id = playback['device']['id']
+        item = playback.get('item') or {}
+        playing_uri = item.get('uri')
         if restart_current:
             # A different song is now current; start it from the beginning
             self._send_window(device_id, 0, paused=not playback['is_playing'])
             return
+        # Catch up with any skips the queue hasn't heard about yet, so the list re-sent below
+        # continues from the song that's really playing
+        if playing_uri and self._accept_report(playing_uri, item.get('name')):
+            self.queue.observe(playing_uri, *self._name_artist(item))
         window = self.queue.rebuild_window_if_changed()
         if window:
             self._start(*window, device_id, playback.get('progress_ms') or 0, paused=not playback['is_playing'])
 
-    def observe_playback(self, uri, context_uri=None, position_ms=0):
-        """Keep the queue in step with what Spotify is playing"""
+    def observe_playback(self, uri, context_uri=None, position_ms=0, name=None, artist=None, context_verified=False):
+        """Keep the queue in step with what Spotify is playing.
+
+        The device hands Spotify a plain list of songs, which has no playlist or album context, so
+        a context means another app started playback. Reports from the page aren't trusted for
+        this (context_verified=False) and are checked with Spotify first.
+        """
         if not uri:
             return
         with self.lock:
             if not self.queue.active:
                 return
-            moved = self.queue.observe(uri)
-            if moved is None and context_uri:
-                # Something else started a playlist or album; Spotify's own queue is in charge now
+            if not self._accept_report(uri, name):
+                return
+            if context_uri and (context_verified or self._playback_started_elsewhere()):
+                # Spotify's own queue is in charge now
                 self.queue.active = False
-            elif moved and self.queue.needs_refill():
+                return
+            moved = self.queue.observe(uri, name, artist)
+            if moved and self.queue.needs_refill():
                 self._send_window(None, position_ms or 0)
+
+    def _accept_report(self, uri, name=None):
+        """Whether to act on a report of what Spotify is playing. After the device sends a list,
+        reports describe what played before it until Spotify confirms the new current song."""
+        if self._confirmed:
+            return True
+        current = self.queue.current or {}
+        if uri == current.get('uri') or (name and name == current.get('name')):
+            self._confirmed = True
+        elif time.monotonic() - self._sent_at > CONFIRM_TIMEOUT_S:
+            # Spotify went somewhere else (e.g. a very quick skip); follow it from here
+            self._confirmed = True
+            return True
+        return False
+
+    def _playback_started_elsewhere(self):
+        """Confirm with Spotify that another app started a playlist or album, rather than trusting
+        a report that may predate the device's own list"""
+        playback = self.sp.current_playback() or {}
+        return bool((playback.get('context') or {}).get('uri'))
+
+    @staticmethod
+    def _name_artist(item):
+        artists = item.get('artists') or []
+        return item.get('name'), artists[0]['name'] if artists else None
 
     def get_user_saved_albums(self, limit=50, offset=0):
         """Get user's saved albums"""

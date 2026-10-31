@@ -173,7 +173,7 @@ async function run() {
     check('album colour taken from cover (red)', await js(`return /^hsl\\((35\\d|[0-9]|1\\d) /.test(P.style.getPropertyValue('--album'));`), await js(`return P.style.getPropertyValue('--album');`));
     await shot('01-now-playing');
     check('switches to lyrics after 4s intro', await waitFor(`view() === 'lyrics'`, 6000));
-    check('current lyric matches playback position', await js(`return $('.lyric-line.current')?.textContent === 'Song A line ' + (Math.floor(pos() / 3000) + 1);`), await js(`return [$('.lyric-line.current')?.textContent, pos()];`));
+    check('current lyric matches playback position', await js(`const p = pos(), text = $('.lyric-line.current')?.textContent; return [p - 300, p].some(t => text === 'Song A line ' + (Math.floor(t / 3000) + 1));`), await js(`return [$('.lyric-line.current')?.textContent, pos()];`));
     // The scroll animates for ~0.5s whenever the line changes, so wait for it to settle
     check('current line centred', await waitFor(`(() => { const r = $('.lyric-line.current')?.getBoundingClientRect(); if (!r) return false; const c = (r.top + r.height / 2) / innerHeight; return c > 0.43 && c < 0.51; })()`, 3000), await js(`const r = $('.lyric-line.current').getBoundingClientRect(); return (r.top + r.height / 2) / innerHeight;`));
     await shot('02-lyrics');

@@ -190,6 +190,8 @@ class VinylPlayer {
         this.queue = null;            // last state from /api/queue
         this.queueDrag = null;
         this.reportedUri = null;
+        this.queueReportTimer = null;
+        this.queueReports = 0;
 
         // Library
         this.libraryTab = 'playlists';
@@ -416,6 +418,8 @@ class VinylPlayer {
         try {
             await this.postJson('/api/now-playing', {
                 uri: playback.uri,
+                name: playback.name,
+                artist: playback.artist,
                 context_uri: playback.contextUri || null,
                 position_ms: Math.floor(playback.positionMs || 0)
             });
@@ -999,6 +1003,19 @@ class VinylPlayer {
 
     applyQueue(state) {
         this.queue = state;
+        // The server ignores reports for a moment after it re-sends the queue to Spotify, so if it
+        // still disagrees with what's playing, tell it again shortly
+        clearTimeout(this.queueReportTimer);
+        // Spotify can play another version of a song under a different ID, so compare names too
+        const disagrees = state.active && state.current && this.track
+            && state.current.uri !== this.track.uri && state.current.name !== this.track.name;
+        this.queueReports = disagrees ? (this.queueReports || 0) + 1 : 0;
+        // A few tries is enough; a song that isn't in the queue at all (e.g. queued from a phone) stays unknown
+        if (disagrees && this.queueReports <= 3) {
+            this.queueReportTimer = setTimeout(() => {
+                if (this.track) this.reportNowPlaying({ ...this.track, positionMs: this.currentPositionMs() });
+            }, 3500);
+        }
         this.renderModeButtons();
         this.highlightPlayingRows();
         // Don't redraw under a finger that's dragging a row

@@ -107,7 +107,8 @@ def create_app():
         # When playback is on this device the page reads it from the SDK, so it reports
         # track changes here to keep the queue in step
         data = request.json or {}
-        spotify_service.observe_playback(data.get('uri'), data.get('context_uri'), data.get('position_ms'))
+        spotify_service.observe_playback(data.get('uri'), data.get('context_uri'), data.get('position_ms'),
+                                         data.get('name'), data.get('artist'))
         return jsonify({'success': True})
     
     @app.route('/api/shuffle', methods=['PUT'])

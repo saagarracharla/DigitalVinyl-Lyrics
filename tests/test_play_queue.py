@@ -53,6 +53,15 @@ class PlayQueueTest(unittest.TestCase):
         self.assertFalse(q.observe('spotify:track:t1'))       # same song
         self.assertIsNone(q.observe('spotify:track:other'))   # not ours
 
+    def test_follows_spotify_playing_another_version_of_a_song(self):
+        q = PlayQueue()
+        q.load(tracks(3))
+        q.build_window()
+        self.assertTrue(q.observe('spotify:track:other-id', 'Song 1', 'A'))
+        self.assertEqual(q.current['id'], 't1')
+        self.assertFalse(q.observe('spotify:track:other-id', 'Song 1', 'A'))
+        self.assertIsNone(q.observe('spotify:track:other-id', 'Song 1', 'Someone else'))
+
     def test_next_in_queue_plays_before_the_playlist(self):
         q = PlayQueue()
         q.load(tracks(3))
@@ -220,8 +229,82 @@ class SpotifyServiceQueueTest(unittest.TestCase):
         self.assertIn('error', data)
         self.assertEqual(self.service.queue.user_queue, [])
 
+    def test_reports_wait_until_spotify_plays_the_sent_list(self):
+        self.service.play_item('playlist', 'P', device_id='dev')
+        # Spotify is still on the song from before, which is also further down the new list
+        self.service.observe_playback('spotify:track:t7', name='Song 7', artist='A')
+        self.assertEqual(self.service.queue.current['id'], 't0')
+        # Once it reports the sent song, it's followed again
+        self.service.observe_playback('spotify:track:t0', name='Song 0', artist='A')
+        self.service.observe_playback('spotify:track:t1', name='Song 1', artist='A')
+        self.assertEqual(self.service.queue.current['id'], 't1')
+
+    def test_takeover_reported_before_confirmation_is_acted_on_later(self):
+        self.service.play_item('playlist', 'P', device_id='dev')
+        self.service.observe_playback('spotify:track:t5', 'spotify:playlist:P', context_verified=True)
+        self.assertTrue(self.service.queue.active, 'probably the playlist from before the device took over')
+        self.service._sent_at -= 60
+        self.service.observe_playback('spotify:track:t5', 'spotify:playlist:P', context_verified=True)
+        self.assertFalse(self.service.queue.active)
+
+    def test_stale_report_right_after_playing_is_ignored(self):
+        self.service.play_item('playlist', 'P', device_id='dev')
+        self.sp.current_playback.return_value = {'item': {'uri': 'spotify:track:old'}, 'context': {'uri': 'spotify:playlist:old'}}
+        self.service.observe_playback('spotify:track:old', 'spotify:playlist:old')
+        self.assertTrue(self.service.queue.active)
+
+    def test_stale_song_right_after_jumping_does_not_move_the_queue_back(self):
+        self.service.play_item('playlist', 'P', device_id='dev')
+        self.sp.current_playback.return_value = {'device': {'id': 'dev'}, 'progress_ms': 1000, 'is_playing': True,
+                                                 'item': {'uri': 'spotify:track:t0'}}
+        self.service.edit_queue('play', self.service.queue.context_queue[2]['uid'])
+        # Spotify briefly still reports t0, which is now in the window's history
+        self.service.observe_playback('spotify:track:t0')
+        self.assertEqual(self.service.queue.current['id'], 't3')
+
+    def test_previous_right_after_playing_is_followed(self):
+        self.service.play_item('playlist', 'P', device_id='dev')
+        self.service.observe_playback('spotify:track:t0')
+        self.service.observe_playback('spotify:track:t1')
+        self.service.observe_playback('spotify:track:t0')
+        self.assertEqual(self.service.queue.current['id'], 't0')
+
+    def test_skip_right_after_an_edit_is_followed(self):
+        self.service.play_item('playlist', 'P', device_id='dev')
+        self.service.observe_playback('spotify:track:t0')
+        self.service.edit_queue('remove', self.service.queue.context_queue[0]['uid'])
+        self.service.observe_playback('spotify:track:t0')
+        self.service.observe_playback('spotify:track:t2')
+        self.assertEqual(self.service.queue.current['id'], 't2')
+
+    def test_edit_catches_up_with_a_skip_the_queue_missed(self):
+        self.service.play_item('playlist', 'P', device_id='dev')
+        self.service._confirmed = True
+        self.sp.current_playback.return_value = {'device': {'id': 'dev'}, 'progress_ms': 1000, 'is_playing': True,
+                                                 'item': {'uri': 'spotify:track:t1'}}
+        self.service.edit_queue('remove', self.service.queue.context_queue[2]['uid'])
+        kwargs = self.sp.start_playback.call_args.kwargs
+        self.assertEqual(kwargs['uris'][kwargs['offset']['position']], 'spotify:track:t1')
+
+    def test_report_not_confirmed_by_spotify_is_ignored(self):
+        self.service.play_item('playlist', 'P', device_id='dev')
+        self.service._confirmed = True
+        # The page says another playlist started, but Spotify says our song is playing with no context
+        self.sp.current_playback.return_value = {'item': {'uri': 'spotify:track:t0'}, 'context': None}
+        self.service.observe_playback('spotify:track:zzz', 'spotify:album:other')
+        self.assertTrue(self.service.queue.active)
+
+    def test_same_playlist_started_elsewhere_also_hands_control_back(self):
+        self.service.play_item('playlist', 'P', device_id='dev')
+        self.service._confirmed = True
+        # A phone starts the same playlist at a song that's also in the device's list
+        self.service.observe_playback('spotify:track:t5', 'spotify:playlist:P', context_verified=True)
+        self.assertFalse(self.service.queue.active)
+
     def test_playback_started_elsewhere_hands_control_back_to_spotify(self):
         self.service.play_item('playlist', 'P', device_id='dev')
+        self.service._confirmed = True
+        self.sp.current_playback.return_value = {'item': {'uri': 'spotify:track:zzz'}, 'context': {'uri': 'spotify:album:other'}}
         self.service.observe_playback('spotify:track:zzz', 'spotify:album:other')
         self.assertFalse(self.service.queue.active)
         self.sp.queue.return_value = {'currently_playing': None, 'queue': []}
