@@ -155,9 +155,12 @@ class SpotifyServiceQueueTest(unittest.TestCase):
         patcher = patch.object(spotify_service.SpotifyService, '_initialize_spotify', lambda self: None)
         patcher.start()
         self.addCleanup(patcher.stop)
-        state_patch = patch.object(spotify_service, 'PLAYER_STATE_FILE', '/nonexistent/dir/state.json')
-        state_patch.start()
-        self.addCleanup(state_patch.stop)
+        # Don't read or write the real shuffle/repeat file
+        for name, value in [('_load_player_state', lambda self: {'shuffle': False, 'repeat': 'off'}),
+                            ('_save_player_state', lambda self: None)]:
+            state_patch = patch.object(spotify_service.SpotifyService, name, value)
+            state_patch.start()
+            self.addCleanup(state_patch.stop)
 
         self.service = spotify_service.SpotifyService()
         self.sp = self.service.sp = MagicMock()
